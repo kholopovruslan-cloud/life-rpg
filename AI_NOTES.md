@@ -4,7 +4,7 @@ Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогры
 
 ## What is here
 
-- LIFE RPG v2.2 is an English-language React + TypeScript interface with an Express API and local SQLite storage.
+- LIFE RPG v2.2.1 is an English-language React + TypeScript interface with an Express API and local SQLite storage.
 - Local account registration, sign-in, sign-out, password changes, `scrypt` password hashes, hashed database session tokens, and HTTP-only session cookies are implemented. No mail is sent; password recovery by email is not available.
 - Data is scoped to the signed-in user. First registration imports the v1 save after a database backup; later accounts start with fresh profiles and quests.
 - Quests award XP and 10 coins. Every 250 XP grants a level and skill point. Skill branches enforce level/prerequisite gates and grant category XP bonuses.
@@ -12,6 +12,7 @@ Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогры
 - Eight heroes share equal role bonuses: Mira/Aster (Mind), Kai/Rowan (Body), Sol/Ember (Focus), and Noor/Lyra (Social). Four starter heroes are free; four alternate appearances cost 150 earned game coins. No real-money checkout exists.
 - Original SVG portraits are project assets. There are no paid API, AI, or image dependencies.
 - The 2.2 guild topbar containing `LOCAL SAVE` and the account menu stays fixed on desktop and mobile; mobile navigation occupies its own fixed row above it.
+- The v2.2.1 `/api/state` hero records include `className` for the UI as well as the database-oriented `characterClass`; keep both fields in sync when changing the hero payload.
 
 ## Run it
 
@@ -36,7 +37,8 @@ The API defaults to `http://127.0.0.1:3001`; Vite proxies `/api`. The local DB i
 - Version 2 commit: `f7fb396` — `Version 2: Local accounts, skills, and guild RPG interface`.
 - Version 2.1 commit: `cd5777e` — `Version 2.1: Character roles, unlockable heroes, and achievements`.
 - Version 2.2 commit: `9d13cc3` — `Version 2.2: Pin the guild header while scrolling`.
-- The release sequence is v1 `644f969`, v1.1 `72e748f`, v2.0 `f7fb396`, v2.1 `cd5777e`, and v2.2 `9d13cc3`. A small docs-only commit adds the v2.2 hash; keep earlier history intact.
+- Version 2.2.1 is committed as `Fix: Map hero roles for the guild dashboard`; its hash will be recorded in a small docs commit.
+- The release sequence is v1 `644f969`, v1.1 `72e748f`, v2.0 `f7fb396`, v2.1 `cd5777e`, v2.2 `9d13cc3`, and v2.2.1 (hash pending). A small docs-only commit adds the latest hash; keep earlier history intact.
 
 ## Constraints
 

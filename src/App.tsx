@@ -127,7 +127,7 @@ export default function App(){
           {tab==='Armory'&&<Armory data={data} character={character} busy={busy} onBuy={buyItem} onEquip={equipItem} onBuyHero={buyHero} onSelectHero={chooseHero}/>}
           {tab==='Achievements'&&<Achievements data={data}/>}
         </>}
-        <footer className="guild-footer"><span>✦ LIFE RPG</span><i/> PROGRESS OVER PERFECTION <span className="footer-version">LOCAL CAMPAIGN · V2.2</span></footer>
+        <footer className="guild-footer"><span>✦ LIFE RPG</span><i/> PROGRESS OVER PERFECTION <span className="footer-version">LOCAL CAMPAIGN · V2.2.1</span></footer>
       </div>
     </main>
     {toast&&<div className="game-toast" role="status"><Sparkles size={16}/>{toast}</div>}

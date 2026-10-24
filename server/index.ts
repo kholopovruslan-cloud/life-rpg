@@ -338,7 +338,7 @@ function createApp(db:Database.Database){
     const skills=skillTree.map(skill=>({...skill,unlocked:unlocked.has(skill.id),canUnlock:!unlocked.has(skill.id)&&profile.skillPoints>=skill.cost&&level>=skill.minLevel&&(!skill.requires||unlocked.has(skill.requires))}))
     const inventory=(db.prepare('SELECT item_id AS itemId FROM inventory WHERE user_id=?').all(userId) as {itemId:string}[]).map(row=>row.itemId)
     const ownedHeroes=new Set((db.prepare('SELECT hero_id FROM owned_heroes WHERE user_id=?').all(userId) as {hero_id:string}[]).map(row=>row.hero_id))
-    const heroes=heroDefinitions.map(hero=>({...hero,owned:ownedHeroes.has(hero.id),active:hero.id===profile.heroId}))
+    const heroes=heroDefinitions.map(hero=>({...hero,className:hero.characterClass,owned:ownedHeroes.has(hero.id),active:hero.id===profile.heroId}))
     const equipment=Object.fromEntries((db.prepare('SELECT slot,item_id AS itemId FROM equipment WHERE user_id=?').all(userId) as {slot:EquipmentSlot;itemId:string}[]).map(row=>[row.slot,row.itemId])) as Partial<Record<EquipmentSlot,string>>
     const completions=db.prepare('SELECT COUNT(*) AS count FROM completions WHERE user_id=?').get(userId) as {count:number}
     const completedDays=(db.prepare('SELECT DISTINCT completed_on AS day FROM completions WHERE user_id=? ORDER BY completed_on').all(userId) as {day:string}[]).map(row=>row.day)
