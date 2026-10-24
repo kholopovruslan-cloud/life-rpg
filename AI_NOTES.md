@@ -35,7 +35,8 @@ The API defaults to `http://127.0.0.1:3001`; Vite proxies `/api`. The local DB i
 - Version 1.1 commit: `72e748f` — `Version 1.1: Add a diverse character roster and themed portraits`.
 - Version 2 commit: `f7fb396` — `Version 2: Local accounts, skills, and guild RPG interface`.
 - Version 2.1 commit: `cd5777e` — `Version 2.1: Character roles, unlockable heroes, and achievements`.
-- Version 2.2 is committed separately as `Version 2.2: Pin the guild header while scrolling`; its hash will be added in a small final docs commit. Keep earlier history intact.
+- Version 2.2 commit: `9d13cc3` — `Version 2.2: Pin the guild header while scrolling`.
+- The release sequence is v1 `644f969`, v1.1 `72e748f`, v2.0 `f7fb396`, v2.1 `cd5777e`, and v2.2 `9d13cc3`. A small docs-only commit adds the v2.2 hash; keep earlier history intact.
 
 ## Constraints
 
