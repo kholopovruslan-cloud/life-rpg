@@ -2,7 +2,7 @@
 
 Turn habits, learning, and everyday tasks into quests. Complete quests to earn XP and coins, grow character skills, keep a streak, and customize your hero.
 
-## Version 2.1
+## Version 2.2
 
 - Local registration and sign-in with email and password. Passwords are stored as `scrypt` hashes; sessions use an HTTP-only cookie and SQLite.
 - Eight original illustrated heroes across four specializations: Mira (Mind), Kai (Body), Sol (Focus), and Noor (Social), each with a +5 XP role bonus. Four alternate heroes can be recruited for 150 earned coins each; all share their role's bonus.
@@ -11,6 +11,7 @@ Turn habits, learning, and everyday tasks into quests. Complete quests to earn X
 - Six cosmetic items to buy and equip; twelve rarity-ranked achievements show live progress.
 - Separate save data per account. The first registered account receives the existing v1 progress; later accounts start fresh.
 - No email is sent. Accounts and saves stay in this local SQLite database and do not sync across devices. There are no paid APIs or image services.
+- The guild header with the local-save status and account menu stays fixed while you scroll. On phones, the navigation and header use separate reserved rows.
 
 ## Run locally
 

@@ -29,3 +29,13 @@
 @media(max-width:1000px){:root{--sidebar-size:204px}.guild-sidebar{width:var(--sidebar-size)}.guild-main{margin-left:var(--sidebar-size)}.hero-collection-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.hero-copy{width:65%}.hero-character{width:150px}}
 @media(max-width:760px){:root{--guild-bar-size:54px}.guild-sidebar{width:100%;height:56px;padding:0 14px}.guild-main{margin-left:0}.guild-topbar{height:var(--guild-bar-size);padding-inline:14px}.content-wrap{padding:18px 14px}.hall-title h1{font-size:34px}.hero-banner{min-height:245px}.hero-copy{padding:20px 16px}.hero-copy h2{font-size:30px}.hero-copy>p{font-size:11px}.hero-character{width:125px;height:180px}.hero-collection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hero-card-art{height:125px}.hero-card-art>.portrait-svg{height:120px}.page-heading h1{font-size:37px}.auth-left{padding-inline:24px}}
 @media(max-width:520px){.game-nav button{width:30px}.guild-sidebar{padding:0 9px}.guild-topbar{padding-inline:9px}.class-chooser button{height:139px;padding:9px}.class-chooser .portrait-svg{width:52px;height:70px}.hero-choice-name>b{font-size:12px}.hero-choice-name>small{font-size:8px}.hero-choice-bonus{font-size:8px!important}.class-chooser button>p{font-size:7px}.hero-collection{padding:12px}.hero-collection-grid{gap:7px}.hero-card-info{padding:8px}.hero-card-name{display:block}.hero-card-name>span{font-size:7px}.hero-card-name h3{font-size:19px}.hero-card-info>p{font-size:8px}.hero-card-info>small{font-size:6px}.hero-card-action button{font-size:6px}.achievement-wall{grid-template-columns:1fr}.achievement-card{min-height:105px}.hall-title h1{font-size:29px}.hero-class{font-size:7px}.hero-copy h2{font-size:26px}.overview-card>div:nth-child(2)>span{font-size:6px}.overview-card small{font-size:6px}.dark-panel,.growth-journal{padding:12px}}
+
+/* Version 2.2 — reserve space for fixed guild chrome at every viewport. */
+.guild-main{padding-top:var(--guild-bar-size)}
+.guild-topbar{position:fixed;top:0;right:0;left:var(--sidebar-size);z-index:20}
+.account-menu{z-index:25}
+@media(max-width:760px){
+  .guild-sidebar{position:fixed;top:0;right:0;bottom:auto;left:0;z-index:30}
+  .guild-main{padding-top:calc(56px + var(--guild-bar-size))}
+  .guild-topbar{top:56px;right:0;left:0}
+}
