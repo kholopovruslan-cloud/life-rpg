@@ -1,68 +1,429 @@
-import express from 'express'
+import express, { type NextFunction, type Request, type Response } from 'express'
 import Database from 'better-sqlite3'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
+const scrypt = promisify(scryptCallback)
 const here = dirname(fileURLToPath(import.meta.url))
-const db = new Database(resolve(here, '../life-rpg.sqlite'))
-db.pragma('journal_mode = WAL')
-db.exec(`
-  CREATE TABLE IF NOT EXISTS profile (id INTEGER PRIMARY KEY CHECK (id = 1), name TEXT NOT NULL, class TEXT NOT NULL, xp INTEGER NOT NULL DEFAULT 0, streak INTEGER NOT NULL DEFAULT 0, last_active TEXT);
-  CREATE TABLE IF NOT EXISTS stats (name TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 1);
-  CREATE TABLE IF NOT EXISTS quests (id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, xp INTEGER NOT NULL, stat TEXT NOT NULL, done_on TEXT);
-  CREATE TABLE IF NOT EXISTS completions (id INTEGER PRIMARY KEY AUTOINCREMENT, quest_id TEXT NOT NULL, completed_on TEXT NOT NULL, xp INTEGER NOT NULL);
-`)
-const today = () => new Date().toISOString().slice(0, 10)
-const profile = db.prepare('SELECT id FROM profile WHERE id=1').get()
-if (!profile) {
-  db.prepare('INSERT INTO profile (id,name,class,xp,streak,last_active) VALUES (1,?,?,?,?,?)').run('Alex Morgan', 'The Scholar', 1240, 4, today())
-  const addStat = db.prepare('INSERT INTO stats(name,value) VALUES (?,?)')
-  for (const [name, value] of [['Mind', 7], ['Body', 4], ['Focus', 6], ['Social', 3]]) addStat.run(name, value)
-  const addQuest = db.prepare('INSERT INTO quests(id,title,category,xp,stat) VALUES (?,?,?,?,?)')
-  const samples = [
-    ['Read 10 pages', 'Mind', 25, 'Mind'], ['Move your body for 20 min', 'Body', 30, 'Body'],
-    ['Focus on one task for 25 min', 'Focus', 35, 'Focus'], ['Drink a glass of water', 'Body', 15, 'Body'],
-  ]
-  for (const [title, category, xp, stat] of samples) addQuest.run(randomUUID(), title, category, xp, stat)
+const databasePath = resolve(process.env.LIFE_RPG_DB ?? resolve(here, '../life-rpg.sqlite'))
+const port = Number(process.env.PORT ?? 3001)
+const SESSION_COOKIE = 'life_rpg_session'
+const SESSION_TTL = 30 * 24 * 60 * 60 * 1000
+const classes = ['The Scholar', 'The Adventurer', 'The Creator', 'The Socialite'] as const
+const categories = ['Mind', 'Body', 'Focus', 'Social'] as const
+type Category = typeof categories[number]
+type EquipmentSlot = 'headwear' | 'outfit' | 'accessory'
+type ShopItem = { id:string; name:string; slot:EquipmentSlot; rarity:'Common'|'Rare'; price:number; description:string; accent:string }
+
+const shopItems:ShopItem[] = [
+  { id:'leaf-circlet', name:'Wayfinder Circlet', slot:'headwear', rarity:'Common', price:30, description:'A small reminder to keep moving forward.', accent:'#94ad76' },
+  { id:'starlit-hood', name:'Starlit Hood', slot:'headwear', rarity:'Rare', price:50, description:'Sewn beneath a sky full of possibility.', accent:'#9d87ca' },
+  { id:'trail-cloak', name:'Trailkeeper Cloak', slot:'outfit', rarity:'Common', price:30, description:'Made for the long road and little detours.', accent:'#789a74' },
+  { id:'dawn-mantle', name:'Dawnweave Mantle', slot:'outfit', rarity:'Rare', price:50, description:'A warm glow for the next chapter.', accent:'#dfa46e' },
+  { id:'moon-charm', name:'Moonlit Charm', slot:'accessory', rarity:'Common', price:30, description:'Carry a little calm into the day.', accent:'#93a8cf' },
+  { id:'sun-compass', name:'Sun Compass', slot:'accessory', rarity:'Rare', price:50, description:'Find your way by what matters most.', accent:'#e5bd6d' },
+]
+
+const skillTree = [
+  { id:'mind-spark', name:'Curious Spark', category:'Mind' as Category, tier:1, minLevel:2, cost:1, xpBonus:5, requires:null, description:'+5 XP from Mind quests.' },
+  { id:'mind-flow', name:'Deep Focus', category:'Mind' as Category, tier:2, minLevel:5, cost:1, xpBonus:10, requires:'mind-spark', description:'+10 XP from Mind quests.' },
+  { id:'body-spark', name:'Moving Start', category:'Body' as Category, tier:1, minLevel:2, cost:1, xpBonus:5, requires:null, description:'+5 XP from Body quests.' },
+  { id:'body-flow', name:'Easy Momentum', category:'Body' as Category, tier:2, minLevel:5, cost:1, xpBonus:10, requires:'body-spark', description:'+10 XP from Body quests.' },
+  { id:'focus-spark', name:'Quiet Hour', category:'Focus' as Category, tier:1, minLevel:2, cost:1, xpBonus:5, requires:null, description:'+5 XP from Focus quests.' },
+  { id:'focus-flow', name:'Steady Rhythm', category:'Focus' as Category, tier:2, minLevel:5, cost:1, xpBonus:10, requires:'focus-spark', description:'+10 XP from Focus quests.' },
+  { id:'social-spark', name:'Open Door', category:'Social' as Category, tier:1, minLevel:2, cost:1, xpBonus:5, requires:null, description:'+5 XP from Social quests.' },
+  { id:'social-flow', name:'Shared Energy', category:'Social' as Category, tier:2, minLevel:5, cost:1, xpBonus:10, requires:'social-spark', description:'+10 XP from Social quests.' },
+]
+
+type ProfileRow = { userId:string; displayName:string; characterClass:string; xp:number; coins:number; streak:number; lastActive:string|null; timeZone:string; skillPoints:number }
+
+function tableExists(db:Database.Database, name:string){ return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) }
+function validTimeZone(value:unknown):string {
+  if (typeof value !== 'string' || value.length > 64) return 'UTC'
+  try { new Intl.DateTimeFormat('en-US',{timeZone:value}); return value } catch { return 'UTC' }
 }
-const app = express()
-app.use(express.json())
-app.get('/api/state', (_req, res) => {
-  const p = db.prepare('SELECT name,class,xp,streak FROM profile WHERE id=1').get() as {name:string;class:string;xp:number;streak:number}
-  const quests = db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests ORDER BY rowid').all()
-  const stats = Object.fromEntries((db.prepare('SELECT name,value FROM stats').all() as {name:string;value:number}[]).map((s) => [s.name,s.value]))
-  const recent = db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(xp),0) AS xp FROM completions WHERE completed_on >= date(?, '-6 days')`).get(today())
-  const weekDays = db.prepare(`SELECT completed_on AS day, COUNT(*) AS count, COALESCE(SUM(xp),0) AS xp FROM completions WHERE completed_on >= date(?, '-6 days') GROUP BY completed_on`).all(today())
-  res.json({ profile:p, quests, stats, week:recent, weekDays, today:today() })
-})
-app.patch('/api/profile/class', (req, res) => {
-  const characterClass = String(req.body.class ?? '')
-  if (!['The Scholar','The Adventurer','The Creator','The Socialite'].includes(characterClass)) return res.status(400).json({ error:'Choose a valid class.' })
-  db.prepare('UPDATE profile SET class=? WHERE id=1').run(characterClass)
-  res.json({ class:characterClass })
-})
-app.post('/api/quests', (req, res) => {
-  const title = String(req.body.title ?? '').trim().slice(0, 80)
-  const category = String(req.body.category ?? 'Focus')
-  const stat = ['Mind','Body','Focus','Social'].includes(category) ? category : 'Focus'
-  if (!title) return res.status(400).json({ error:'Quest title is required.' })
-  const id = randomUUID()
-  db.prepare('INSERT INTO quests(id,title,category,xp,stat) VALUES (?,?,?,?,?)').run(id,title,stat,25,stat)
-  res.status(201).json({ id,title,category:stat,xp:25,stat,doneOn:null })
-})
-app.patch('/api/quests/:id/complete', (req, res) => {
-  const quest = db.prepare('SELECT id,xp,stat,done_on AS doneOn FROM quests WHERE id=?').get(req.params.id) as {id:string;xp:number;stat:string;doneOn:string|null}|undefined
-  if (!quest) return res.status(404).json({ error:'Quest not found.' })
-  const date = today()
-  if (quest.doneOn === date) return res.status(409).json({ error:'Quest already completed today.' })
-  const commit = db.transaction(() => {
-    db.prepare('UPDATE quests SET done_on=? WHERE id=?').run(date,quest.id)
-    db.prepare('INSERT INTO completions(quest_id,completed_on,xp) VALUES (?,?,?)').run(quest.id,date,quest.xp)
-    db.prepare(`UPDATE profile SET xp=xp+?, streak=CASE WHEN last_active=? THEN streak WHEN last_active=date(?, '-1 day') THEN streak+1 ELSE 1 END,last_active=? WHERE id=1`).run(quest.xp,date,date,date)
-    db.prepare('UPDATE stats SET value=value+1 WHERE name=?').run(quest.stat)
+function localDate(timeZone:string, date=new Date()):string {
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date)
+  const part=(type:string)=>parts.find(p=>p.type===type)?.value??'00'
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+function daysBefore(day:string, amount:number):string {
+  const date=new Date(`${day}T00:00:00.000Z`); date.setUTCDate(date.getUTCDate()-amount); return date.toISOString().slice(0,10)
+}
+function hashToken(token:string){ return createHash('sha256').update(token).digest('hex') }
+function cookieToken(request:Request):string|null {
+  const pair=request.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith(`${SESSION_COOKIE}=`))
+  return pair ? pair.slice(SESSION_COOKIE.length+1) : null
+}
+function setSessionCookie(response:Response, token:string){ response.cookie(SESSION_COOKIE,token,{httpOnly:true,sameSite:'strict',secure:false,path:'/',maxAge:SESSION_TTL}) }
+async function hashPassword(password:string,salt=randomBytes(16).toString('hex')){
+  const derived=await scrypt(password,salt,64) as Buffer
+  return {salt,hash:derived.toString('hex')}
+}
+async function passwordMatches(password:string,salt:string,expected:string){
+  const actual=await hashPassword(password,salt)
+  const left=Buffer.from(actual.hash,'hex'), right=Buffer.from(expected,'hex')
+  return left.length===right.length && timingSafeEqual(left,right)
+}
+function issueSession(db:Database.Database,userId:string,response:Response){
+  const token=randomBytes(32).toString('base64url')
+  db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)').run(hashToken(token),userId,Date.now()+SESSION_TTL,Date.now())
+  setSessionCookie(response,token)
+}
+
+function createSchema(db:Database.Database){
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_salt TEXT NOT NULL,
+      password_hash TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+    CREATE TABLE IF NOT EXISTS profiles (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      display_name TEXT NOT NULL, character_class TEXT NOT NULL, xp INTEGER NOT NULL DEFAULT 0,
+      coins INTEGER NOT NULL DEFAULT 0, streak INTEGER NOT NULL DEFAULT 0, last_active TEXT,
+      time_zone TEXT NOT NULL DEFAULT 'UTC', skill_points INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS stats (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY(user_id,name)
+    );
+    CREATE TABLE IF NOT EXISTS quests (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL, category TEXT NOT NULL, xp INTEGER NOT NULL, stat TEXT NOT NULL,
+      done_on TEXT, created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS quests_user_idx ON quests(user_id);
+    CREATE TABLE IF NOT EXISTS completions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      quest_id TEXT NOT NULL, completed_on TEXT NOT NULL, xp_awarded INTEGER NOT NULL, coins_awarded INTEGER NOT NULL DEFAULT 10
+    );
+    CREATE INDEX IF NOT EXISTS completions_user_day_idx ON completions(user_id,completed_on);
+    CREATE TABLE IF NOT EXISTS unlocked_skills (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, skill_id TEXT NOT NULL,
+      unlocked_at INTEGER NOT NULL, PRIMARY KEY(user_id,skill_id)
+    );
+    CREATE TABLE IF NOT EXISTS skill_definitions (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, tier INTEGER NOT NULL,
+      min_level INTEGER NOT NULL, cost INTEGER NOT NULL, xp_bonus INTEGER NOT NULL,
+      requires TEXT, description TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS inventory (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, item_id TEXT NOT NULL,
+      purchased_at INTEGER NOT NULL, PRIMARY KEY(user_id,item_id)
+    );
+    CREATE TABLE IF NOT EXISTS equipment (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, slot TEXT NOT NULL,
+      item_id TEXT NOT NULL, PRIMARY KEY(user_id,slot)
+    );
+    CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `)
+}
+
+async function initializeDatabase(db:Database.Database){
+  db.pragma('foreign_keys = ON')
+  const version=(db.prepare('PRAGMA user_version').get() as {user_version:number}).user_version
+  if(version>=2){ createSchema(db); return }
+
+  const hasLegacyProfile=tableExists(db,'profile')
+  if(hasLegacyProfile){
+    const backupPath=`${db.name}.v1-backup.sqlite`
+    const {existsSync}=await import('node:fs')
+    if(!existsSync(backupPath)) await db.backup(backupPath)
+  }
+  const legacyTables=['profile','stats','quests','completions'].filter(name=>tableExists(db,name))
+  const migrate=db.transaction(()=>{
+    for(const name of legacyTables) db.exec(`ALTER TABLE ${name} RENAME TO legacy_${name}`)
+    createSchema(db)
+    db.prepare('INSERT OR REPLACE INTO app_meta(key,value) VALUES (?,?)').run('legacy_save',hasLegacyProfile?'available':'claimed')
+    db.pragma('user_version = 2')
   })
-  commit()
-  res.json({ ok:true, xp:quest.xp })
-})
-app.listen(3001, '127.0.0.1', () => console.log('Life RPG data server ready at http://127.0.0.1:3001'))
+  migrate()
+}
+
+function seedStats(db:Database.Database,userId:string){
+  const addStat=db.prepare('INSERT INTO stats(user_id,name,value) VALUES (?,?,1)')
+  for(const stat of categories) addStat.run(userId,stat)
+}
+function seedQuests(db:Database.Database,userId:string){
+  const addQuest=db.prepare('INSERT INTO quests(id,user_id,title,category,xp,stat,done_on,created_at) VALUES (?,?,?,?,?,?,NULL,?)')
+  const starter=[['Read 10 pages','Mind',25,'Mind'],['Move your body for 20 min','Body',30,'Body'],['Focus on one task for 25 min','Focus',35,'Focus'],['Drink a glass of water','Body',15,'Body']] as const
+  for(const [title,categoryName,xp,stat] of starter) addQuest.run(randomUUID(),userId,title,categoryName,xp,stat,Date.now())
+}
+function seedFreshProfile(db:Database.Database,userId:string,displayName:string,characterClass:string,timeZone:string){
+  db.prepare('INSERT INTO profiles(user_id,display_name,character_class,xp,coins,streak,last_active,time_zone,skill_points) VALUES (?,?,?,0,0,0,NULL,?,0)')
+    .run(userId,displayName,characterClass,timeZone)
+  seedStats(db,userId);seedQuests(db,userId)
+}
+
+function createApp(db:Database.Database){
+  const app=express()
+  app.use(express.json({limit:'32kb'}))
+
+  const requireAuth=(request:Request,response:Response,next:NextFunction)=>{
+    const token=cookieToken(request)
+    if(!token){response.status(401).json({error:'Sign in to continue.'});return}
+    const session=db.prepare(`SELECT s.user_id AS userId FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?`).get(hashToken(token),Date.now()) as {userId:string}|undefined
+    if(!session){response.clearCookie(SESSION_COOKIE,{httpOnly:true,sameSite:'strict',secure:false,path:'/'});response.status(401).json({error:'Your session has expired. Sign in again.'});return}
+    request.userId=session.userId
+    const supplied=request.get('X-Time-Zone')
+    if(supplied){
+      const zone=validTimeZone(supplied)
+      db.prepare('UPDATE profiles SET time_zone=? WHERE user_id=?').run(zone,session.userId)
+    }
+    next()
+  }
+
+  app.post('/api/auth/register',async(request,response)=>{
+    const email=typeof request.body.email==='string'?request.body.email.trim().toLowerCase():''
+    const password=typeof request.body.password==='string'?request.body.password:''
+    const displayName=typeof request.body.displayName==='string'?request.body.displayName.trim():''
+    const characterClass=String(request.body.characterClass??'')
+    const timeZone=validTimeZone(request.body.timeZone)
+    if(email.length>254||!/^\S+@\S+\.\S+$/.test(email)) return response.status(400).json({error:'Enter a valid email address.'})
+    if(password.length<8||password.length>128) return response.status(400).json({error:'Use a password between 8 and 128 characters.'})
+    if(displayName.length<2||displayName.length>24) return response.status(400).json({error:'Choose a name between 2 and 24 characters.'})
+    if(!classes.includes(characterClass as typeof classes[number])) return response.status(400).json({error:'Choose a character to continue.'})
+    const credentials=await hashPassword(password)
+    const userId=randomUUID()
+    try{
+      const createUser=db.transaction(()=>{
+        db.prepare('INSERT INTO users(id,email,password_salt,password_hash,created_at) VALUES (?,?,?,?,?)').run(userId,email,credentials.salt,credentials.hash,Date.now())
+        const claim=db.prepare("SELECT value FROM app_meta WHERE key='legacy_save'").get() as {value:string}|undefined
+        const legacyProfile=claim?.value==='available'&&tableExists(db,'legacy_profile')
+          ? db.prepare('SELECT * FROM legacy_profile ORDER BY id LIMIT 1').get() as {name:string;xp:number;streak:number;last_active:string|null}|undefined
+          : undefined
+        if(legacyProfile){
+          const skillPoints=Math.floor(legacyProfile.xp/250)
+          db.prepare('INSERT INTO profiles(user_id,display_name,character_class,xp,coins,streak,last_active,time_zone,skill_points) VALUES (?,?,?, ?,0,?,?,?,?)')
+            .run(userId,displayName,characterClass,legacyProfile.xp,legacyProfile.streak,legacyProfile.last_active,timeZone,skillPoints)
+          if(tableExists(db,'legacy_stats')){
+            const oldStats=db.prepare('SELECT name,value FROM legacy_stats').all() as {name:string;value:number}[]
+            for(const stat of categories){const old=oldStats.find(item=>item.name===stat);db.prepare('INSERT INTO stats(user_id,name,value) VALUES (?,?,?)').run(userId,stat,old?.value??1)}
+          }else seedStats(db,userId)
+          if(tableExists(db,'legacy_quests')){
+            const oldQuests=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM legacy_quests').all() as {id:string;title:string;category:string;xp:number;stat:string;doneOn:string|null}[]
+            const insert=db.prepare('INSERT INTO quests(id,user_id,title,category,xp,stat,done_on,created_at) VALUES (?,?,?,?,?,?,?,?)')
+            for(const quest of oldQuests) insert.run(quest.id,userId,quest.title,quest.category,quest.xp,quest.stat,quest.doneOn,Date.now())
+          }else seedQuests(db,userId)
+          if(tableExists(db,'legacy_completions')){
+            const oldCompletions=db.prepare('SELECT id,quest_id AS questId,completed_on AS completedOn,xp FROM legacy_completions').all() as {id:number;questId:string;completedOn:string;xp:number}[]
+            const insert=db.prepare('INSERT INTO completions(id,user_id,quest_id,completed_on,xp_awarded,coins_awarded) VALUES (?,?,?,?,?,0)')
+            for(const completion of oldCompletions) insert.run(completion.id,userId,completion.questId,completion.completedOn,completion.xp)
+          }
+          db.prepare("UPDATE app_meta SET value='claimed' WHERE key='legacy_save'").run()
+        }else{
+          seedFreshProfile(db,userId,displayName,characterClass,timeZone)
+          if(claim?.value==='available') db.prepare("UPDATE app_meta SET value='claimed' WHERE key='legacy_save'").run()
+        }
+      })
+      createUser()
+    }catch(error){
+      if(error instanceof Error&&error.message.includes('UNIQUE constraint failed: users.email')) return response.status(409).json({error:'An account with this email already exists.'})
+      throw error
+    }
+    issueSession(db,userId,response)
+    response.status(201).json({user:{id:userId,email},profile:profileFor(db,userId)})
+  })
+
+  app.post('/api/auth/login',async(request,response)=>{
+    const email=typeof request.body.email==='string'?request.body.email.trim().toLowerCase():''
+    const password=typeof request.body.password==='string'?request.body.password:''
+    const user=db.prepare('SELECT id,email,password_salt AS salt,password_hash AS passwordHash FROM users WHERE email=?').get(email) as {id:string;email:string;salt:string;passwordHash:string}|undefined
+    if(!user||!await passwordMatches(password,user.salt,user.passwordHash)) return response.status(401).json({error:'Email or password is incorrect.'})
+    const timeZone=validTimeZone(request.body.timeZone)
+    db.prepare('UPDATE profiles SET time_zone=? WHERE user_id=?').run(timeZone,user.id)
+    issueSession(db,user.id,response)
+    response.json({user:{id:user.id,email:user.email},profile:profileFor(db,user.id)})
+  })
+
+  app.post('/api/auth/logout',(request,response)=>{
+    const token=cookieToken(request)
+    if(token) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token))
+    response.clearCookie(SESSION_COOKIE,{httpOnly:true,sameSite:'strict',secure:false,path:'/'})
+    response.json({ok:true})
+  })
+
+  app.get('/api/auth/me',requireAuth,(request,response)=>{
+    const user=db.prepare('SELECT id,email FROM users WHERE id=?').get(request.userId) as {id:string;email:string}
+    response.json({user,profile:profileFor(db,request.userId!)})
+  })
+
+  app.post('/api/auth/password',requireAuth,async(request,response)=>{
+    const currentPassword=typeof request.body.currentPassword==='string'?request.body.currentPassword:''
+    const newPassword=typeof request.body.newPassword==='string'?request.body.newPassword:''
+    if(newPassword.length<8||newPassword.length>128) return response.status(400).json({error:'Use a password between 8 and 128 characters.'})
+    const user=db.prepare('SELECT password_salt AS salt,password_hash AS passwordHash FROM users WHERE id=?').get(request.userId) as {salt:string;passwordHash:string}
+    if(!await passwordMatches(currentPassword,user.salt,user.passwordHash)) return response.status(401).json({error:'Current password is incorrect.'})
+    const credentials=await hashPassword(newPassword)
+    const token=randomBytes(32).toString('base64url')
+    const update=db.transaction(()=>{
+      db.prepare('UPDATE users SET password_salt=?,password_hash=? WHERE id=?').run(credentials.salt,credentials.hash,request.userId)
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(request.userId)
+      db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)').run(hashToken(token),request.userId,Date.now()+SESSION_TTL,Date.now())
+    })
+    update();setSessionCookie(response,token);response.json({ok:true})
+  })
+
+  app.get('/api/state',requireAuth,(request,response)=>{
+    const userId=request.userId!
+    const profile=profileFor(db,userId)
+    const today=localDate(profile.timeZone)
+    const quests=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests WHERE user_id=? ORDER BY created_at,rowid').all(userId)
+    const stats=Object.fromEntries((db.prepare('SELECT name,value FROM stats WHERE user_id=?').all(userId) as {name:string;value:number}[]).map(item=>[item.name,item.value]))
+    const weekStart=daysBefore(today,6)
+    const week=db.prepare('SELECT COUNT(*) AS count,COALESCE(SUM(xp_awarded),0) AS xp FROM completions WHERE user_id=? AND completed_on>=?').get(userId,weekStart)
+    const weekDays=db.prepare('SELECT completed_on AS day,COUNT(*) AS count,COALESCE(SUM(xp_awarded),0) AS xp FROM completions WHERE user_id=? AND completed_on>=? GROUP BY completed_on').all(userId,weekStart)
+    const unlocked=new Set((db.prepare('SELECT skill_id FROM unlocked_skills WHERE user_id=?').all(userId) as {skill_id:string}[]).map(row=>row.skill_id))
+    const level=Math.floor(profile.xp/250)+1
+    const skills=skillTree.map(skill=>({...skill,unlocked:unlocked.has(skill.id),canUnlock:!unlocked.has(skill.id)&&profile.skillPoints>=skill.cost&&level>=skill.minLevel&&(!skill.requires||unlocked.has(skill.requires))}))
+    const inventory=(db.prepare('SELECT item_id AS itemId FROM inventory WHERE user_id=?').all(userId) as {itemId:string}[]).map(row=>row.itemId)
+    const equipment=Object.fromEntries((db.prepare('SELECT slot,item_id AS itemId FROM equipment WHERE user_id=?').all(userId) as {slot:EquipmentSlot;itemId:string}[]).map(row=>[row.slot,row.itemId])) as Partial<Record<EquipmentSlot,string>>
+    const completions=db.prepare('SELECT COUNT(*) AS count FROM completions WHERE user_id=?').get(userId) as {count:number}
+    const completedDays=(db.prepare('SELECT DISTINCT completed_on AS day FROM completions WHERE user_id=? ORDER BY completed_on').all(userId) as {day:string}[]).map(row=>row.day)
+    const unlockedAchievementIds=deriveAchievements(completions.count,profile,level,unlocked.size,equipment,completedDays)
+    const achievements=achievementDefinitions.map(item=>({...item,unlocked:unlockedAchievementIds.has(item.id)}))
+    response.json({profile,quests,stats,week,weekDays,today,skills,shopItems,inventory,equipment,achievements})
+  })
+
+  app.patch('/api/profile/class',requireAuth,(request,response)=>{
+    const characterClass=String(request.body.characterClass??request.body.class??'')
+    if(!classes.includes(characterClass as typeof classes[number])) return response.status(400).json({error:'Choose a valid character.'})
+    db.prepare('UPDATE profiles SET character_class=? WHERE user_id=?').run(characterClass,request.userId)
+    response.json({profile:profileFor(db,request.userId!)})
+  })
+
+  app.post('/api/quests',requireAuth,(request,response)=>{
+    const title=typeof request.body.title==='string'?request.body.title.trim().slice(0,80):''
+    const category=request.body.category as Category
+    if(!title) return response.status(400).json({error:'Quest title is required.'})
+    if(!categories.includes(category)) return response.status(400).json({error:'Choose a quest category.'})
+    const id=randomUUID()
+    db.prepare('INSERT INTO quests(id,user_id,title,category,xp,stat,created_at) VALUES (?,?,?,?,25,?,?)').run(id,request.userId,title,category,category,Date.now())
+    response.status(201).json({id,title,category,xp:25,stat:category,doneOn:null})
+  })
+
+  app.patch('/api/quests/:id/complete',requireAuth,(request,response)=>{
+    const userId=request.userId!
+    const profile=profileFor(db,userId)
+    const today=localDate(profile.timeZone)
+    const quest=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests WHERE id=? AND user_id=?').get(request.params.id,userId) as {id:string;title:string;category:Category;xp:number;stat:Category;doneOn:string|null}|undefined
+    if(!quest) return response.status(404).json({error:'Quest not found.'})
+    if(quest.doneOn===today) return response.status(409).json({error:'Quest already completed today.'})
+    const bonus=db.prepare(`SELECT COALESCE(SUM(s.xp_bonus),0) AS bonus FROM unlocked_skills u JOIN skill_definitions s ON s.id=u.skill_id WHERE u.user_id=? AND s.category=?`).get(userId,quest.category) as {bonus:number}
+    const xpAwarded=quest.xp+bonus.bonus
+    const coinsAwarded=10
+    const currentLevel=Math.floor(profile.xp/250)+1
+    const nextXP=profile.xp+xpAwarded
+    const nextLevel=Math.floor(nextXP/250)+1
+    const newSkillPoints=profile.skillPoints+Math.max(0,nextLevel-currentLevel)
+    const streak=profile.lastActive===today?profile.streak:profile.lastActive===daysBefore(today,1)?profile.streak+1:1
+    const complete=db.transaction(()=>{
+      const result=db.prepare('UPDATE quests SET done_on=? WHERE id=? AND user_id=? AND (done_on IS NULL OR done_on<>?)').run(today,quest.id,userId,today)
+      if(result.changes!==1) throw new Error('QUEST_ALREADY_DONE')
+      db.prepare('INSERT INTO completions(user_id,quest_id,completed_on,xp_awarded,coins_awarded) VALUES (?,?,?,?,?)').run(userId,quest.id,today,xpAwarded,coinsAwarded)
+      db.prepare('UPDATE profiles SET xp=?,coins=coins+?,skill_points=?,streak=?,last_active=? WHERE user_id=?').run(nextXP,coinsAwarded,newSkillPoints,streak,today,userId)
+      db.prepare('UPDATE stats SET value=value+1 WHERE user_id=? AND name=?').run(userId,quest.stat)
+    })
+    try{complete()}catch(error){if(error instanceof Error&&error.message==='QUEST_ALREADY_DONE')return response.status(409).json({error:'Quest already completed today.'});throw error}
+    response.json({ok:true,xpAwarded,coinsAwarded,leveledUp:nextLevel>currentLevel,level:nextLevel,skillPoints:newSkillPoints})
+  })
+
+  app.post('/api/skills/:id/unlock',requireAuth,(request,response)=>{
+    const userId=request.userId!
+    const skill=skillTree.find(item=>item.id===request.params.id)
+    if(!skill) return response.status(404).json({error:'Skill not found.'})
+    const profile=profileFor(db,userId)
+    const level=Math.floor(profile.xp/250)+1
+    const existing=db.prepare('SELECT 1 FROM unlocked_skills WHERE user_id=? AND skill_id=?').get(userId,skill.id)
+    if(existing) return response.status(409).json({error:'Skill is already unlocked.'})
+    if(level<skill.minLevel) return response.status(400).json({error:`Reach level ${skill.minLevel} to unlock this skill.`})
+    if(profile.skillPoints<skill.cost) return response.status(400).json({error:'You need another skill point.'})
+    if(skill.requires&&!db.prepare('SELECT 1 FROM unlocked_skills WHERE user_id=? AND skill_id=?').get(userId,skill.requires)) return response.status(400).json({error:'Unlock the previous skill in this path first.'})
+    const unlock=db.transaction(()=>{
+      db.prepare('UPDATE profiles SET skill_points=skill_points-? WHERE user_id=?').run(skill.cost,userId)
+      db.prepare('INSERT INTO unlocked_skills(user_id,skill_id,unlocked_at) VALUES (?,?,?)').run(userId,skill.id,Date.now())
+    })
+    unlock();response.json({ok:true,skill:skill.id,profile:profileFor(db,userId)})
+  })
+
+  app.post('/api/shop/:itemId/purchase',requireAuth,(request,response)=>{
+    const userId=request.userId!
+    const item=shopItems.find(entry=>entry.id===request.params.itemId)
+    if(!item) return response.status(404).json({error:'Item not found.'})
+    if(db.prepare('SELECT 1 FROM inventory WHERE user_id=? AND item_id=?').get(userId,item.id)) return response.status(409).json({error:'You already own this item.'})
+    const profile=profileFor(db,userId)
+    if(profile.coins<item.price) return response.status(400).json({error:'Not enough coins for this item.'})
+    const purchase=db.transaction(()=>{
+      const result=db.prepare('UPDATE profiles SET coins=coins-? WHERE user_id=? AND coins>=?').run(item.price,userId,item.price)
+      if(result.changes!==1) throw new Error('NOT_ENOUGH_COINS')
+      db.prepare('INSERT INTO inventory(user_id,item_id,purchased_at) VALUES (?,?,?)').run(userId,item.id,Date.now())
+    })
+    try{purchase()}catch(error){if(error instanceof Error&&error.message==='NOT_ENOUGH_COINS')return response.status(400).json({error:'Not enough coins for this item.'});throw error}
+    response.status(201).json({ok:true,item:item.id,profile:profileFor(db,userId)})
+  })
+
+  app.put('/api/equipment/:slot',requireAuth,(request,response)=>{
+    const userId=request.userId!
+    const slot=request.params.slot as EquipmentSlot
+    if(!['headwear','outfit','accessory'].includes(slot)) return response.status(400).json({error:'Choose a valid equipment slot.'})
+    const itemId=request.body.itemId===null?null:String(request.body.itemId??'')
+    if(itemId){
+      const item=shopItems.find(entry=>entry.id===itemId&&entry.slot===slot)
+      if(!item||!db.prepare('SELECT 1 FROM inventory WHERE user_id=? AND item_id=?').get(userId,itemId)) return response.status(400).json({error:'That item is not in your inventory for this slot.'})
+      db.prepare('INSERT INTO equipment(user_id,slot,item_id) VALUES (?,?,?) ON CONFLICT(user_id,slot) DO UPDATE SET item_id=excluded.item_id').run(userId,slot,itemId)
+    }else db.prepare('DELETE FROM equipment WHERE user_id=? AND slot=?').run(userId,slot)
+    response.json({ok:true,equipment:db.prepare('SELECT slot,item_id AS itemId FROM equipment WHERE user_id=?').all(userId)})
+  })
+
+  app.use((error:unknown,_request:Request,response:Response,_next:NextFunction)=>{
+    console.error(error)
+    response.status(500).json({error:'Something went wrong. Please try again.'})
+  })
+  return app
+}
+
+function profileFor(db:Database.Database,userId:string):ProfileRow{
+  return db.prepare(`SELECT user_id AS userId,display_name AS displayName,character_class AS characterClass,xp,coins,streak,last_active AS lastActive,time_zone AS timeZone,skill_points AS skillPoints FROM profiles WHERE user_id=?`).get(userId) as ProfileRow
+}
+
+const achievementDefinitions=[
+  {id:'first-step',name:'First Steps',description:'Complete your first quest.',icon:'footprints'},
+  {id:'three-day-streak',name:'On a Roll',description:'Show up three days in a row.',icon:'flame'},
+  {id:'quest-collector',name:'Quest Collector',description:'Complete 25 quests.',icon:'trophy'},
+  {id:'skill-seeker',name:'Skill Seeker',description:'Unlock three skills.',icon:'sparkles'},
+  {id:'well-equipped',name:'Ready for Anything',description:'Equip a complete set.',icon:'shield'},
+  {id:'level-five',name:'Rising Hero',description:'Reach level 5.',icon:'award'},
+]
+function deriveAchievements(count:number,profile:ProfileRow,level:number,skills:number,equipment:Partial<Record<EquipmentSlot,string>>,days:string[]){
+  const unlocked=new Set<string>()
+  if(count>=1)unlocked.add('first-step')
+  if(count>=25)unlocked.add('quest-collector')
+  if(skills>=3)unlocked.add('skill-seeker')
+  if(Object.keys(equipment).length>=3)unlocked.add('well-equipped')
+  if(level>=5)unlocked.add('level-five')
+  const daySet=new Set(days)
+  if(days.some(day=>daySet.has(daysBefore(day,-1))&&daySet.has(daysBefore(day,-2))))unlocked.add('three-day-streak')
+  return unlocked
+}
+
+declare global { namespace Express { interface Request { userId?:string } } }
+
+async function start(){
+  const db=new Database(databasePath)
+  db.pragma('journal_mode = WAL')
+  await initializeDatabase(db)
+  for(const skill of skillTree) db.prepare(`INSERT OR IGNORE INTO skill_definitions(id,name,category,tier,min_level,cost,xp_bonus,requires,description) VALUES (?,?,?,?,?,?,?,?,?)`).run(skill.id,skill.name,skill.category,skill.tier,skill.minLevel,skill.cost,skill.xpBonus,skill.requires,skill.description)
+  const app=createApp(db)
+  app.listen(port,'127.0.0.1',()=>console.log(`Life RPG v2 API ready at http://127.0.0.1:${port}`))
+}
+
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+  start().catch(error=>{console.error(error);process.exitCode=1})
+}

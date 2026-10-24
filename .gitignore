@@ -3,3 +3,5 @@ dist/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.v1-backup.sqlite
+*.v1-backup

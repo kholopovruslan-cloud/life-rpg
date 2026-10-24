@@ -1,14 +1,16 @@
 # LIFE RPG
 
-Turn habits, learning, and everyday tasks into quests. Complete quests to earn XP, build streaks, grow character attributes, and explore your next skill.
+Turn habits, learning, and everyday tasks into quests. Complete quests to earn XP and coins, grow character skills, keep a streak, and customize your hero.
 
-## Version 1
+## Version 2
 
-- English-language responsive dashboard built with React and TypeScript.
-- Character classes, levels, XP, daily quests, streaks, and attribute progress.
-- Local SQLite persistence for the profile, quests, and quest completions.
-- Weekly activity overview, skill-tree preview, and achievement cards.
-- Add quests, complete daily quests, and change character class.
+- Local registration and sign-in with email and password. Passwords are stored as `scrypt` hashes; sessions use an HTTP-only cookie and SQLite.
+- Four illustrated heroes, a dark responsive guild interface, and English UI.
+- Daily and custom quests, timezone-aware streaks, XP, levels, coins, and stat progress.
+- Functional skill paths with level and prerequisite gates and category-specific XP bonuses.
+- Six cosmetic items to buy and equip; achievements unlock from play history.
+- Separate save data per account. The first registered account receives the existing v1 progress; later accounts start fresh.
+- No email is sent. Accounts and saves stay in this local SQLite database and do not sync across devices. There are no paid APIs or image services.
 
 ## Run locally
 
@@ -19,10 +21,14 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL printed in the terminal (usually `http://127.0.0.1:5173`). The app starts a local API at `http://127.0.0.1:3001`; Vite proxies `/api` requests to it. SQLite data is stored in `life-rpg.sqlite` in the project root and is excluded from Git.
+Open the local Vite URL printed in the terminal (usually `http://127.0.0.1:5173`). The API runs at `http://127.0.0.1:3001`; Vite proxies `/api` requests to it. The SQLite database is `life-rpg.sqlite` in the project root and is excluded from Git. On the first v2 startup with a v1 database, a separate `.v1-backup.sqlite` copy is created before the one-time migration.
 
 Build the frontend with `npm run build`.
 
-## Notes
+## Local account limitations
 
-This is a local-first prototype. The skill tree and achievement cards are illustrative in version 1; they do not yet unlock dynamically. No paid APIs or AI services are used.
+This is a single-device local app, not a hosted account service. Email confirmation, password reset by email, cross-device sync, and deployment are not included. Use a password you do not use for other services.
+
+## Previous version
+
+Version 1 and its commits remain in Git history. The v2 database migration keeps the old XP, streak, stats, quests, and completion history for the first new account, while the signup form supplies the new display name and character class.

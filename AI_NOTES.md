@@ -1,39 +1,38 @@
 # Note for the next AI
 
-Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогрыз), the friendly little goblin who refitted this project.
+Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогрыз), the friendly goblin who brought LIFE RPG to version 2.
 
-## What I changed
+## What is here
 
-- Replaced the old “Parallel Me” static mockup with **LIFE RPG**, an English-language life gamification dashboard.
-- Built the frontend with React, TypeScript, Vite, and Lucide icons. The UI uses free assets and has no paid API or AI integration.
-- Added an Express + SQLite local data service using `better-sqlite3`. The database file (`life-rpg.sqlite`) is created automatically on first start and is intentionally git-ignored.
-- Added daily quests, XP and levels, streak tracking, four character classes, attributes, weekly activity, a skill-tree preview, and achievement cards.
-- Quest completion, adding quests, and changing class are backed by the local SQLite database.
+- LIFE RPG v2 is an English-language React + TypeScript interface with an Express API and local SQLite storage.
+- Local account registration, sign-in, sign-out, password changes, `scrypt` password hashes, hashed database session tokens, and HTTP-only session cookies are implemented. No mail is sent; password recovery by email is not available.
+- Data is scoped to the signed-in user. First registration imports the v1 save after a database backup; later accounts start with fresh profiles and quests.
+- Quests award XP and 10 coins. Every 250 XP grants a level and skill point. Skill branches enforce level/prerequisite gates and grant category XP bonuses.
+- The armory has six cosmetic items with purchase and equipment checks. Achievements derive from completion history, streak, level, skill unlocks, and equipment.
+- The four hero portraits are original inline SVG. There are no paid API, AI, or image dependencies.
 
 ## Run it
 
 1. Run `npm install` once.
-2. Run `npm run dev` to start the Vite UI and local API together.
-3. Open the local address printed by Vite (usually `http://127.0.0.1:5173`).
+2. Run `npm run dev` to start Vite and the SQLite API together.
+3. Open the local Vite address (usually `http://127.0.0.1:5173`).
 
-The API uses `http://127.0.0.1:3001` and Vite proxies `/api` requests to it. `npm run build` creates the production frontend build.
+The API defaults to `http://127.0.0.1:3001`; Vite proxies `/api`. The local DB is `life-rpg.sqlite` and is ignored by Git. For a v1 DB, the first v2 startup creates a `.v1-backup.sqlite` copy before applying the transactional schema migration. The first registered user claims the migrated save.
 
-## Files to know
+## Important files
 
-- `src/App.tsx` — dashboard UI, actions, and API calls.
-- `src/styles.css` — responsive visual styling.
-- `server/index.ts` — SQLite schema, seed data, and API routes.
+- `src/App.tsx` — sign-in, guild UI, quests, skills, armory, and achievements.
+- `src/styles.css` — responsive dark RPG styling.
+- `server/index.ts` — auth/session handling, user-scoped SQLite schema, migrations, and game API.
 - `vite.config.ts` — React plugin and local API proxy.
 
-The skill tree and achievement cards are currently illustrative UI; they do not yet unlock from database progress. The seeded profile is demo data. Keep the whole interface in English unless the user asks otherwise, and keep the tools/resources free.
-
-## GitHub checkpoint
+## Git history
 
 - Public repository: https://github.com/kholopovruslan-cloud/life-rpg
-- The initial version 1 commit was created locally and pushed to `main`.
-- Commit: `644f969` — `Version 1: LIFE RPG dashboard, quests, and SQLite progress tracking`.
-- SQLite files, installed dependencies, and build output are ignored by `.gitignore`.
+- Version 1 commit: `644f969` — `Version 1: LIFE RPG dashboard, quests, and SQLite progress tracking`.
+- Version 1.1 commit: `72e748f` — `Version 1.1: Add a diverse character roster and themed portraits`.
+- Version 2 is saved as a new release commit after v1.1. Keep both earlier commits intact.
 
-## Current character/UI improvements
+## Constraints
 
-The current follow-up work adds four distinct selectable character portraits (Mira the Scholar, Kai the Adventurer, Sol the Creator, and Noor the Socialite), class-specific hero colors, and a richer character roster. The portraits are original inline SVG, so they do not need paid APIs or downloaded image assets. These follow-up edits are intentionally not part of the version 1 commit; review `git status` before committing or pushing them.
+Keep the interface in English unless asked otherwise. Accounts are local to this device; do not imply cloud sync. Keep images and services free. This version deliberately has no combat or punishments for missed real-life tasks.
