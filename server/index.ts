@@ -16,6 +16,18 @@ const categories = ['Mind', 'Body', 'Focus', 'Social'] as const
 type Category = typeof categories[number]
 type EquipmentSlot = 'headwear' | 'outfit' | 'accessory'
 type ShopItem = { id:string; name:string; slot:EquipmentSlot; rarity:'Common'|'Rare'; price:number; description:string; accent:string }
+type HeroDefinition = { id:string; name:string; characterClass:typeof classes[number]; category:Category; look:'violet'|'green'|'orange'|'blue'; tagline:string; description:string; xpBonus:number; price:number|null; rarity:'Starter'|'Epic' }
+
+const heroDefinitions:HeroDefinition[] = [
+  {id:'mira',name:'Mira',characterClass:'The Scholar',category:'Mind',look:'violet',tagline:'Curious mind',description:'Finds wonder in every new idea.',xpBonus:5,price:null,rarity:'Starter'},
+  {id:'kai',name:'Kai',characterClass:'The Adventurer',category:'Body',look:'green',tagline:'Trailblazer',description:'Turns small steps into bold journeys.',xpBonus:5,price:null,rarity:'Starter'},
+  {id:'sol',name:'Sol',characterClass:'The Creator',category:'Focus',look:'orange',tagline:'Idea maker',description:'Makes something meaningful from a blank page.',xpBonus:5,price:null,rarity:'Starter'},
+  {id:'noor',name:'Noor',characterClass:'The Socialite',category:'Social',look:'blue',tagline:'Community builder',description:'Grows stronger through connection.',xpBonus:5,price:null,rarity:'Starter'},
+  {id:'aster',name:'Aster',characterClass:'The Scholar',category:'Mind',look:'violet',tagline:'Starweaver',description:'Maps bright ideas into constellations.',xpBonus:5,price:150,rarity:'Epic'},
+  {id:'rowan',name:'Rowan',characterClass:'The Adventurer',category:'Body',look:'green',tagline:'Trailwarden',description:'Keeps a steady pace through every season.',xpBonus:5,price:150,rarity:'Epic'},
+  {id:'ember',name:'Ember',characterClass:'The Creator',category:'Focus',look:'orange',tagline:'Forgeheart',description:'Shapes patient effort into something real.',xpBonus:5,price:150,rarity:'Epic'},
+  {id:'lyra',name:'Lyra',characterClass:'The Socialite',category:'Social',look:'blue',tagline:'Wayfinder',description:'Brings people together around a shared path.',xpBonus:5,price:150,rarity:'Epic'},
+]
 
 const shopItems:ShopItem[] = [
   { id:'leaf-circlet', name:'Wayfinder Circlet', slot:'headwear', rarity:'Common', price:30, description:'A small reminder to keep moving forward.', accent:'#94ad76' },
@@ -37,7 +49,7 @@ const skillTree = [
   { id:'social-flow', name:'Shared Energy', category:'Social' as Category, tier:2, minLevel:5, cost:1, xpBonus:10, requires:'social-spark', description:'+10 XP from Social quests.' },
 ]
 
-type ProfileRow = { userId:string; displayName:string; characterClass:string; xp:number; coins:number; streak:number; lastActive:string|null; timeZone:string; skillPoints:number }
+type ProfileRow = { userId:string; displayName:string; characterClass:string; heroId:string; xp:number; coins:number; streak:number; lastActive:string|null; timeZone:string; skillPoints:number }
 
 function tableExists(db:Database.Database, name:string){ return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) }
 function validTimeZone(value:unknown):string {
@@ -86,7 +98,7 @@ function createSchema(db:Database.Database){
     CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
     CREATE TABLE IF NOT EXISTS profiles (
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      display_name TEXT NOT NULL, character_class TEXT NOT NULL, xp INTEGER NOT NULL DEFAULT 0,
+      display_name TEXT NOT NULL, character_class TEXT NOT NULL, hero_id TEXT NOT NULL DEFAULT 'mira', xp INTEGER NOT NULL DEFAULT 0,
       coins INTEGER NOT NULL DEFAULT 0, streak INTEGER NOT NULL DEFAULT 0, last_active TEXT,
       time_zone TEXT NOT NULL DEFAULT 'UTC', skill_points INTEGER NOT NULL DEFAULT 0
     );
@@ -114,6 +126,16 @@ function createSchema(db:Database.Database){
       min_level INTEGER NOT NULL, cost INTEGER NOT NULL, xp_bonus INTEGER NOT NULL,
       requires TEXT, description TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS hero_definitions (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, character_class TEXT NOT NULL, category TEXT NOT NULL,
+      look TEXT NOT NULL, tagline TEXT NOT NULL, description TEXT NOT NULL,
+      xp_bonus INTEGER NOT NULL, price INTEGER, rarity TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS owned_heroes (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      hero_id TEXT NOT NULL REFERENCES hero_definitions(id), purchased_at INTEGER NOT NULL,
+      PRIMARY KEY(user_id,hero_id)
+    );
     CREATE TABLE IF NOT EXISTS inventory (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, item_id TEXT NOT NULL,
       purchased_at INTEGER NOT NULL, PRIMARY KEY(user_id,item_id)
@@ -126,10 +148,37 @@ function createSchema(db:Database.Database){
   `)
 }
 
+function seedHeroDefinitions(db:Database.Database){
+  const insert=db.prepare(`INSERT OR IGNORE INTO hero_definitions(id,name,character_class,category,look,tagline,description,xp_bonus,price,rarity) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+  for(const hero of heroDefinitions) insert.run(hero.id,hero.name,hero.characterClass,hero.category,hero.look,hero.tagline,hero.description,hero.xpBonus,hero.price,hero.rarity)
+}
+function starterHeroForClass(characterClass:string){return heroDefinitions.find(hero=>hero.characterClass===characterClass&&hero.price===null)??heroDefinitions[0]}
+function grantStarterHeroes(db:Database.Database,userId:string){
+  const insert=db.prepare('INSERT OR IGNORE INTO owned_heroes(user_id,hero_id,purchased_at) VALUES (?,?,?)')
+  for(const hero of heroDefinitions.filter(item=>item.price===null)) insert.run(userId,hero.id,0)
+}
+
 async function initializeDatabase(db:Database.Database){
   db.pragma('foreign_keys = ON')
   const version=(db.prepare('PRAGMA user_version').get() as {user_version:number}).user_version
-  if(version>=2){ createSchema(db); return }
+  if(version>=3){ createSchema(db); seedHeroDefinitions(db); return }
+  if(version===2){
+    const migrate=db.transaction(()=>{
+      createSchema(db)
+      db.exec("ALTER TABLE profiles ADD COLUMN hero_id TEXT NOT NULL DEFAULT 'mira'")
+      seedHeroDefinitions(db)
+      const profiles=db.prepare('SELECT user_id AS userId,character_class AS characterClass FROM profiles').all() as {userId:string;characterClass:string}[]
+      const update=db.prepare('UPDATE profiles SET hero_id=? WHERE user_id=?')
+      for(const profile of profiles){
+        const hero=starterHeroForClass(profile.characterClass)
+        update.run(hero.id,profile.userId)
+        grantStarterHeroes(db,profile.userId)
+      }
+      db.pragma('user_version = 3')
+    })
+    migrate()
+    return
+  }
 
   const hasLegacyProfile=tableExists(db,'profile')
   if(hasLegacyProfile){
@@ -141,8 +190,9 @@ async function initializeDatabase(db:Database.Database){
   const migrate=db.transaction(()=>{
     for(const name of legacyTables) db.exec(`ALTER TABLE ${name} RENAME TO legacy_${name}`)
     createSchema(db)
+    seedHeroDefinitions(db)
     db.prepare('INSERT OR REPLACE INTO app_meta(key,value) VALUES (?,?)').run('legacy_save',hasLegacyProfile?'available':'claimed')
-    db.pragma('user_version = 2')
+    db.pragma('user_version = 3')
   })
   migrate()
 }
@@ -156,9 +206,10 @@ function seedQuests(db:Database.Database,userId:string){
   const starter=[['Read 10 pages','Mind',25,'Mind'],['Move your body for 20 min','Body',30,'Body'],['Focus on one task for 25 min','Focus',35,'Focus'],['Drink a glass of water','Body',15,'Body']] as const
   for(const [title,categoryName,xp,stat] of starter) addQuest.run(randomUUID(),userId,title,categoryName,xp,stat,Date.now())
 }
-function seedFreshProfile(db:Database.Database,userId:string,displayName:string,characterClass:string,timeZone:string){
-  db.prepare('INSERT INTO profiles(user_id,display_name,character_class,xp,coins,streak,last_active,time_zone,skill_points) VALUES (?,?,?,0,0,0,NULL,?,0)')
-    .run(userId,displayName,characterClass,timeZone)
+function seedFreshProfile(db:Database.Database,userId:string,displayName:string,characterClass:string,heroId:string,timeZone:string){
+  db.prepare('INSERT INTO profiles(user_id,display_name,character_class,hero_id,xp,coins,streak,last_active,time_zone,skill_points) VALUES (?,?,?,?,0,0,0,NULL,?,0)')
+    .run(userId,displayName,characterClass,heroId,timeZone)
+  grantStarterHeroes(db,userId)
   seedStats(db,userId);seedQuests(db,userId)
 }
 
@@ -190,6 +241,7 @@ function createApp(db:Database.Database){
     if(password.length<8||password.length>128) return response.status(400).json({error:'Use a password between 8 and 128 characters.'})
     if(displayName.length<2||displayName.length>24) return response.status(400).json({error:'Choose a name between 2 and 24 characters.'})
     if(!classes.includes(characterClass as typeof classes[number])) return response.status(400).json({error:'Choose a character to continue.'})
+    const starterHero=starterHeroForClass(characterClass)
     const credentials=await hashPassword(password)
     const userId=randomUUID()
     try{
@@ -201,8 +253,9 @@ function createApp(db:Database.Database){
           : undefined
         if(legacyProfile){
           const skillPoints=Math.floor(legacyProfile.xp/250)
-          db.prepare('INSERT INTO profiles(user_id,display_name,character_class,xp,coins,streak,last_active,time_zone,skill_points) VALUES (?,?,?, ?,0,?,?,?,?)')
-            .run(userId,displayName,characterClass,legacyProfile.xp,legacyProfile.streak,legacyProfile.last_active,timeZone,skillPoints)
+          db.prepare('INSERT INTO profiles(user_id,display_name,character_class,hero_id,xp,coins,streak,last_active,time_zone,skill_points) VALUES (?,?,?,?,?,0,?,?,?,?)')
+            .run(userId,displayName,characterClass,starterHero.id,legacyProfile.xp,legacyProfile.streak,legacyProfile.last_active,timeZone,skillPoints)
+          grantStarterHeroes(db,userId)
           if(tableExists(db,'legacy_stats')){
             const oldStats=db.prepare('SELECT name,value FROM legacy_stats').all() as {name:string;value:number}[]
             for(const stat of categories){const old=oldStats.find(item=>item.name===stat);db.prepare('INSERT INTO stats(user_id,name,value) VALUES (?,?,?)').run(userId,stat,old?.value??1)}
@@ -219,7 +272,7 @@ function createApp(db:Database.Database){
           }
           db.prepare("UPDATE app_meta SET value='claimed' WHERE key='legacy_save'").run()
         }else{
-          seedFreshProfile(db,userId,displayName,characterClass,timeZone)
+          seedFreshProfile(db,userId,displayName,characterClass,starterHero.id,timeZone)
           if(claim?.value==='available') db.prepare("UPDATE app_meta SET value='claimed' WHERE key='legacy_save'").run()
         }
       })
@@ -284,19 +337,46 @@ function createApp(db:Database.Database){
     const level=Math.floor(profile.xp/250)+1
     const skills=skillTree.map(skill=>({...skill,unlocked:unlocked.has(skill.id),canUnlock:!unlocked.has(skill.id)&&profile.skillPoints>=skill.cost&&level>=skill.minLevel&&(!skill.requires||unlocked.has(skill.requires))}))
     const inventory=(db.prepare('SELECT item_id AS itemId FROM inventory WHERE user_id=?').all(userId) as {itemId:string}[]).map(row=>row.itemId)
+    const ownedHeroes=new Set((db.prepare('SELECT hero_id FROM owned_heroes WHERE user_id=?').all(userId) as {hero_id:string}[]).map(row=>row.hero_id))
+    const heroes=heroDefinitions.map(hero=>({...hero,owned:ownedHeroes.has(hero.id),active:hero.id===profile.heroId}))
     const equipment=Object.fromEntries((db.prepare('SELECT slot,item_id AS itemId FROM equipment WHERE user_id=?').all(userId) as {slot:EquipmentSlot;itemId:string}[]).map(row=>[row.slot,row.itemId])) as Partial<Record<EquipmentSlot,string>>
     const completions=db.prepare('SELECT COUNT(*) AS count FROM completions WHERE user_id=?').get(userId) as {count:number}
     const completedDays=(db.prepare('SELECT DISTINCT completed_on AS day FROM completions WHERE user_id=? ORDER BY completed_on').all(userId) as {day:string}[]).map(row=>row.day)
-    const unlockedAchievementIds=deriveAchievements(completions.count,profile,level,unlocked.size,equipment,completedDays)
-    const achievements=achievementDefinitions.map(item=>({...item,unlocked:unlockedAchievementIds.has(item.id)}))
-    response.json({profile,quests,stats,week,weekDays,today,skills,shopItems,inventory,equipment,achievements})
+    const categoryCounts=Object.fromEntries((db.prepare(`SELECT q.category AS category,COUNT(*) AS count FROM completions c JOIN quests q ON q.id=c.quest_id AND q.user_id=c.user_id WHERE c.user_id=? GROUP BY q.category`).all(userId) as {category:Category;count:number}[]).map(row=>[row.category,row.count])) as Partial<Record<Category,number>>
+    const unlockedAchievementIds=deriveAchievements(completions.count,level,unlocked.size,equipment,completedDays,categoryCounts,ownedHeroes.size)
+    const achievements=achievementDefinitions.map(item=>{const progress=achievementProgress(item.id,completions.count,level,unlocked.size,equipment,completedDays,categoryCounts,ownedHeroes.size);return {...item,progress,target:achievementTargets[item.id],unlocked:unlockedAchievementIds.has(item.id)}})
+    response.json({profile,quests,stats,week,weekDays,today,skills,shopItems,inventory,equipment,heroes,achievements})
   })
 
   app.patch('/api/profile/class',requireAuth,(request,response)=>{
     const characterClass=String(request.body.characterClass??request.body.class??'')
     if(!classes.includes(characterClass as typeof classes[number])) return response.status(400).json({error:'Choose a valid character.'})
-    db.prepare('UPDATE profiles SET character_class=? WHERE user_id=?').run(characterClass,request.userId)
+    const hero=starterHeroForClass(characterClass)
+    db.prepare('UPDATE profiles SET character_class=?,hero_id=? WHERE user_id=?').run(characterClass,hero.id,request.userId)
     response.json({profile:profileFor(db,request.userId!)})
+  })
+
+  app.post('/api/heroes/:id/purchase',requireAuth,(request,response)=>{
+    const hero=heroDefinitions.find(item=>item.id===request.params.id)
+    if(!hero||hero.price===null) return response.status(404).json({error:'Unlockable hero not found.'})
+    const userId=request.userId!
+    if(db.prepare('SELECT 1 FROM owned_heroes WHERE user_id=? AND hero_id=?').get(userId,hero.id)) return response.status(409).json({error:'You already own this hero.'})
+    const purchase=db.transaction(()=>{
+      const debit=db.prepare('UPDATE profiles SET coins=coins-? WHERE user_id=? AND coins>=?').run(hero.price,userId,hero.price)
+      if(debit.changes!==1) throw new Error('NOT_ENOUGH_COINS')
+      db.prepare('INSERT INTO owned_heroes(user_id,hero_id,purchased_at) VALUES (?,?,?)').run(userId,hero.id,Date.now())
+    })
+    try{purchase()}catch(error){if(error instanceof Error&&error.message==='NOT_ENOUGH_COINS')return response.status(400).json({error:'You need more coins to recruit this hero.'});throw error}
+    response.status(201).json({ok:true,heroId:hero.id,profile:profileFor(db,userId)})
+  })
+
+  app.put('/api/profile/hero',requireAuth,(request,response)=>{
+    const hero=heroDefinitions.find(item=>item.id===String(request.body.heroId??''))
+    if(!hero) return response.status(400).json({error:'Choose a valid hero.'})
+    if(!db.prepare('SELECT 1 FROM owned_heroes WHERE user_id=? AND hero_id=?').get(request.userId,hero.id)) return response.status(403).json({error:'Unlock this hero before choosing them.'})
+    const change=db.transaction(()=>db.prepare('UPDATE profiles SET hero_id=?,character_class=? WHERE user_id=?').run(hero.id,hero.characterClass,request.userId))
+    change()
+    response.json({ok:true,profile:profileFor(db,request.userId!)})
   })
 
   app.post('/api/quests',requireAuth,(request,response)=>{
@@ -316,8 +396,10 @@ function createApp(db:Database.Database){
     const quest=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests WHERE id=? AND user_id=?').get(request.params.id,userId) as {id:string;title:string;category:Category;xp:number;stat:Category;doneOn:string|null}|undefined
     if(!quest) return response.status(404).json({error:'Quest not found.'})
     if(quest.doneOn===today) return response.status(409).json({error:'Quest already completed today.'})
-    const bonus=db.prepare(`SELECT COALESCE(SUM(s.xp_bonus),0) AS bonus FROM unlocked_skills u JOIN skill_definitions s ON s.id=u.skill_id WHERE u.user_id=? AND s.category=?`).get(userId,quest.category) as {bonus:number}
-    const xpAwarded=quest.xp+bonus.bonus
+    const skillBonus=db.prepare(`SELECT COALESCE(SUM(s.xp_bonus),0) AS bonus FROM unlocked_skills u JOIN skill_definitions s ON s.id=u.skill_id WHERE u.user_id=? AND s.category=?`).get(userId,quest.category) as {bonus:number}
+    const hero=heroDefinitions.find(item=>item.id===profile.heroId)
+    const heroBonus=hero?.category===quest.category?hero.xpBonus:0
+    const xpAwarded=quest.xp+skillBonus.bonus+heroBonus
     const coinsAwarded=10
     const currentLevel=Math.floor(profile.xp/250)+1
     const nextXP=profile.xp+xpAwarded
@@ -390,27 +472,36 @@ function createApp(db:Database.Database){
 }
 
 function profileFor(db:Database.Database,userId:string):ProfileRow{
-  return db.prepare(`SELECT user_id AS userId,display_name AS displayName,character_class AS characterClass,xp,coins,streak,last_active AS lastActive,time_zone AS timeZone,skill_points AS skillPoints FROM profiles WHERE user_id=?`).get(userId) as ProfileRow
+  return db.prepare(`SELECT user_id AS userId,display_name AS displayName,character_class AS characterClass,hero_id AS heroId,xp,coins,streak,last_active AS lastActive,time_zone AS timeZone,skill_points AS skillPoints FROM profiles WHERE user_id=?`).get(userId) as ProfileRow
 }
 
 const achievementDefinitions=[
-  {id:'first-step',name:'First Steps',description:'Complete your first quest.',icon:'footprints'},
-  {id:'three-day-streak',name:'On a Roll',description:'Show up three days in a row.',icon:'flame'},
-  {id:'quest-collector',name:'Quest Collector',description:'Complete 25 quests.',icon:'trophy'},
-  {id:'skill-seeker',name:'Skill Seeker',description:'Unlock three skills.',icon:'sparkles'},
-  {id:'well-equipped',name:'Ready for Anything',description:'Equip a complete set.',icon:'shield'},
-  {id:'level-five',name:'Rising Hero',description:'Reach level 5.',icon:'award'},
+  {id:'first-step',name:'First Steps',description:'Complete your first quest.',icon:'footprints',rarity:'Common'},
+  {id:'three-day-streak',name:'On a Roll',description:'Complete quests on three consecutive days.',icon:'flame',rarity:'Rare'},
+  {id:'quest-collector',name:'Quest Collector',description:'Complete 25 quests.',icon:'trophy',rarity:'Epic'},
+  {id:'skill-seeker',name:'Skill Seeker',description:'Unlock three skills.',icon:'sparkles',rarity:'Rare'},
+  {id:'well-equipped',name:'Ready for Anything',description:'Equip an item in all three slots.',icon:'shield',rarity:'Rare'},
+  {id:'level-five',name:'Rising Hero',description:'Reach level 5.',icon:'award',rarity:'Epic'},
+  {id:'mindful-learner',name:'Mindful Learner',description:'Complete 10 Mind quests.',icon:'book-open',rarity:'Common'},
+  {id:'body-in-motion',name:'Body in Motion',description:'Complete 10 Body quests.',icon:'heart',rarity:'Common'},
+  {id:'focus-keeper',name:'Focus Keeper',description:'Complete 10 Focus quests.',icon:'target',rarity:'Common'},
+  {id:'kindred-spirit',name:'Kindred Spirit',description:'Complete 10 Social quests.',icon:'users',rarity:'Common'},
+  {id:'guild-regular',name:'A Week of Wonder',description:'Complete quests on seven consecutive days.',icon:'flame',rarity:'Legendary'},
+  {id:'hero-collector',name:'The Whole Party',description:'Recruit all eight heroes.',icon:'crown',rarity:'Legendary'},
 ]
-function deriveAchievements(count:number,profile:ProfileRow,level:number,skills:number,equipment:Partial<Record<EquipmentSlot,string>>,days:string[]){
-  const unlocked=new Set<string>()
-  if(count>=1)unlocked.add('first-step')
-  if(count>=25)unlocked.add('quest-collector')
-  if(skills>=3)unlocked.add('skill-seeker')
-  if(Object.keys(equipment).length>=3)unlocked.add('well-equipped')
-  if(level>=5)unlocked.add('level-five')
-  const daySet=new Set(days)
-  if(days.some(day=>daySet.has(daysBefore(day,-1))&&daySet.has(daysBefore(day,-2))))unlocked.add('three-day-streak')
-  return unlocked
+const achievementTargets:Record<string,number>={'first-step':1,'three-day-streak':3,'quest-collector':25,'skill-seeker':3,'well-equipped':3,'level-five':5,'mindful-learner':10,'body-in-motion':10,'focus-keeper':10,'kindred-spirit':10,'guild-regular':7,'hero-collector':8}
+function longestRun(days:string[]){
+  let best=0,current=0,previous=''
+  for(const day of days){current=previous&&day===daysBefore(previous,-1)?current+1:1;best=Math.max(best,current);previous=day}
+  return best
+}
+function achievementProgress(id:string,count:number,level:number,skills:number,equipment:Partial<Record<EquipmentSlot,string>>,days:string[],categoryCounts:Partial<Record<Category,number>>,ownedHeroes:number){
+  const streak=longestRun(days)
+  const values:Record<string,number>={'first-step':count,'three-day-streak':streak,'quest-collector':count,'skill-seeker':skills,'well-equipped':Object.keys(equipment).length,'level-five':level,'mindful-learner':categoryCounts.Mind??0,'body-in-motion':categoryCounts.Body??0,'focus-keeper':categoryCounts.Focus??0,'kindred-spirit':categoryCounts.Social??0,'guild-regular':streak,'hero-collector':ownedHeroes}
+  return Math.min(values[id]??0,achievementTargets[id]??0)
+}
+function deriveAchievements(count:number,level:number,skills:number,equipment:Partial<Record<EquipmentSlot,string>>,days:string[],categoryCounts:Partial<Record<Category,number>>,ownedHeroes:number){
+  return new Set(achievementDefinitions.filter(item=>achievementProgress(item.id,count,level,skills,equipment,days,categoryCounts,ownedHeroes)>=achievementTargets[item.id]).map(item=>item.id))
 }
 
 declare global { namespace Express { interface Request { userId?:string } } }

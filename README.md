@@ -2,13 +2,13 @@
 
 Turn habits, learning, and everyday tasks into quests. Complete quests to earn XP and coins, grow character skills, keep a streak, and customize your hero.
 
-## Version 2
+## Version 2.1
 
 - Local registration and sign-in with email and password. Passwords are stored as `scrypt` hashes; sessions use an HTTP-only cookie and SQLite.
-- Four illustrated heroes, a dark responsive guild interface, and English UI.
+- Eight original illustrated heroes across four specializations: Mira (Mind), Kai (Body), Sol (Focus), and Noor (Social), each with a +5 XP role bonus. Four alternate heroes can be recruited for 150 earned coins each; all share their role's bonus.
 - Daily and custom quests, timezone-aware streaks, XP, levels, coins, and stat progress.
 - Functional skill paths with level and prerequisite gates and category-specific XP bonuses.
-- Six cosmetic items to buy and equip; achievements unlock from play history.
+- Six cosmetic items to buy and equip; twelve rarity-ranked achievements show live progress.
 - Separate save data per account. The first registered account receives the existing v1 progress; later accounts start fresh.
 - No email is sent. Accounts and saves stay in this local SQLite database and do not sync across devices. There are no paid APIs or image services.
 
@@ -22,6 +22,8 @@ npm run dev
 ```
 
 Open the local Vite URL printed in the terminal (usually `http://127.0.0.1:5173`). The API runs at `http://127.0.0.1:3001`; Vite proxies `/api` requests to it. The SQLite database is `life-rpg.sqlite` in the project root and is excluded from Git. On the first v2 startup with a v1 database, a separate `.v1-backup.sqlite` copy is created before the one-time migration.
+
+Version 2.1 transactionally migrates v2 profiles to the hero collection schema and keeps existing XP, streaks, quests, and completion history.
 
 Build the frontend with `npm run build`.
 
