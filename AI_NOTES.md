@@ -37,8 +37,8 @@ The API defaults to `http://127.0.0.1:3001`; Vite proxies `/api`. The local DB i
 - Version 2 commit: `f7fb396` — `Version 2: Local accounts, skills, and guild RPG interface`.
 - Version 2.1 commit: `cd5777e` — `Version 2.1: Character roles, unlockable heroes, and achievements`.
 - Version 2.2 commit: `9d13cc3` — `Version 2.2: Pin the guild header while scrolling`.
-- Version 2.2.1 is committed as `Fix: Map hero roles for the guild dashboard`; its hash will be recorded in a small docs commit.
-- The release sequence is v1 `644f969`, v1.1 `72e748f`, v2.0 `f7fb396`, v2.1 `cd5777e`, v2.2 `9d13cc3`, and v2.2.1 (hash pending). A small docs-only commit adds the latest hash; keep earlier history intact.
+- Version 2.2.1 commit: `af73f43` — `Fix: Map hero roles for the guild dashboard`.
+- The release sequence is v1 `644f969`, v1.1 `72e748f`, v2.0 `f7fb396`, v2.1 `cd5777e`, v2.2 `9d13cc3`, and v2.2.1 `af73f43`. This hash is recorded in the follow-up docs commit; keep earlier history intact.
 
 ## Constraints
 
