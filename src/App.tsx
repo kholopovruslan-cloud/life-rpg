@@ -2,8 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import {
   Activity, ArrowRight, Award, Backpack, BadgeCheck, BookOpen, Check, ChevronRight,
   CircleHelp, Coins, Compass, Crown, DoorOpen, Flame, Footprints, Gem, Heart, KeyRound,
-  LockKeyhole, LogOut, Moon, Plus, Shield, Sparkles, Star, Swords, Target,
-  Trophy, UserRound, Users, WandSparkles, Zap,
+  LockKeyhole, LogOut, Map, MapPin, Moon, Plus, Shield, Sparkles, Star, Swords, Target,
+  Trophy, UserRound, Users, WandSparkles, X, Zap,
 } from 'lucide-react'
 
 type StatName='Mind'|'Body'|'Focus'|'Social'
@@ -11,9 +11,11 @@ type CharacterLook='violet'|'green'|'orange'|'blue'
 type EquipmentSlot='headwear'|'outfit'|'accessory'
 type Character={id:string;name:string;className:string;look:CharacterLook;category:StatName;tagline:string;description:string;xpBonus:number;price:number|null;rarity:'Starter'|'Epic';owned?:boolean;active?:boolean}
 type Quest={id:string;title:string;category:StatName;xp:number;stat:StatName;doneOn:string|null}
+type CampaignStep={id:string;title:string;category:StatName;xp:number;orderIndex:number;completedAt:string|null;completed:boolean}
+type Campaign={id:string;title:string;description:string;region:string;createdAt:number;steps:CampaignStep[];completedSteps:number;totalSteps:number}
 type Skill={id:string;name:string;category:StatName;tier:number;minLevel:number;cost:number;xpBonus:number;requires:string|null;description:string;unlocked:boolean;canUnlock:boolean}
 type ShopItem={id:string;name:string;slot:EquipmentSlot;rarity:'Common'|'Rare';price:number;description:string;accent:string}
-type GameState={profile:{userId:string;displayName:string;characterClass:string;heroId:string;xp:number;coins:number;streak:number;lastActive:string|null;timeZone:string;skillPoints:number};quests:Quest[];stats:Record<StatName,number>;week:{count:number;xp:number};weekDays:{day:string;count:number;xp:number}[];today:string;skills:Skill[];shopItems:ShopItem[];inventory:string[];equipment:Partial<Record<EquipmentSlot,string>>;heroes:Character[];achievements:{id:string;name:string;description:string;icon:string;rarity:string;progress:number;target:number;unlocked:boolean}[]}
+type GameState={profile:{userId:string;displayName:string;characterClass:string;heroId:string;xp:number;coins:number;streak:number;lastActive:string|null;timeZone:string;skillPoints:number};quests:Quest[];campaigns:Campaign[];stats:Record<StatName,number>;week:{count:number;xp:number};weekDays:{day:string;count:number;xp:number}[];today:string;skills:Skill[];shopItems:ShopItem[];inventory:string[];equipment:Partial<Record<EquipmentSlot,string>>;heroes:Character[];achievements:{id:string;name:string;description:string;icon:string;rarity:string;progress:number;target:number;unlocked:boolean}[]}
 type User={id:string;email:string}
 type ApiError=Error&{status?:number}
 
@@ -88,6 +90,13 @@ export default function App(){
   async function chooseHero(heroId:string){
     try{await api('/api/profile/hero',{method:'PUT',body:JSON.stringify({heroId})});await refresh();announce('Your companion has changed.')}catch(e){setError((e as Error).message)}
   }
+  async function createCampaign(campaign:{title:string;description:string;region:string;steps:{title:string;category:StatName}[]}){
+    try{await api('/api/campaigns',{method:'POST',body:JSON.stringify(campaign)});await refresh();announce('Your campaign has been charted.');return true}catch(e){setError((e as Error).message);return false}
+  }
+  async function completeCampaignStep(campaign:Campaign,step:CampaignStep){
+    setBusy(step.id);setError('')
+    try{const reward=await api<{xpAwarded:number;coinsAwarded:number;leveledUp:boolean;level:number}>(`/api/campaigns/${campaign.id}/steps/${step.id}/complete`,{method:'PATCH'});await refresh();announce(`Milestone complete · +${reward.xpAwarded} XP · +${reward.coinsAwarded} coins${reward.leveledUp?` · Level ${reward.level}!`:''}`)}catch(e){setError((e as Error).message)}finally{setBusy(null)}
+  }
   async function buyHero(hero:Character){
     setBusy(hero.id);setError('')
     try{await api(`/api/heroes/${hero.id}/purchase`,{method:'POST'});await refresh();announce(`${hero.name} joined your collection.`)}catch(e){setError((e as Error).message)}finally{setBusy(null)}
@@ -112,7 +121,7 @@ export default function App(){
     <aside className="guild-sidebar">
       <a className="game-brand" href="#guild"><span className="brand-sigil"><Swords size={19}/></span><span>LIFE <b>RPG</b><small>YOUR PERSONAL ADVENTURE</small></span></a>
       <div className="nav-caption">THE GUILD</div>
-      <nav className="game-nav" aria-label="Main navigation">{[['Guild Hall',DoorOpen],['Quest Board',Target],['Skill Tree',Sparkles],['Armory',Backpack],['Achievements',Trophy]].map(([label,Icon])=><button key={label as string} className={tab===label?'selected':''} onClick={()=>{setTab(label as string);setError('')}}><Icon size={17}/><span>{label as string}</span>{tab===label&&<i/>}</button>)}</nav>
+      <nav className="game-nav" aria-label="Main navigation">{[['Guild Hall',DoorOpen],['Quest Board',Target],['Campaign Map',Map],['Skill Tree',Sparkles],['Armory',Backpack],['Achievements',Trophy]].map(([label,Icon])=><button key={label as string} className={tab===label?'selected':''} onClick={()=>{setTab(label as string);setError('')}}><Icon size={17}/><span>{label as string}</span>{tab===label&&<i/>}</button>)}</nav>
       <div className="sidebar-bottom"><div className="daily-quote"><div className="quote-flourish">✦</div><p>“Great journeys<br/>begin with one<br/><em>small quest.</em>”</p><span>— GUILD WISDOM</span></div><div className="sidebar-player"><div className="player-portrait"><CharacterPortrait look={character.look} heroId={character.id} equipment={data?.equipment}/></div><div className="player-id"><strong>{data?.profile.displayName}</strong><span>LVL {level} · {character.className.replace('The ','')}</span></div><button className="sidebar-logout" title="Sign out" onClick={logout}><LogOut size={15}/></button></div></div>
     </aside>
 
@@ -123,11 +132,12 @@ export default function App(){
         {loading&&!data?<div className="loading-panel"><Sparkles size={19}/> Loading your save…</div>:data&&<>
           {tab==='Guild Hall'&&<GuildHall data={data} character={character} level={level} xpPercent={xpPercent} xpInLevel={xpInLevel} completedCount={completedCount} setTab={setTab} chooseHero={chooseHero}/>}
           {tab==='Quest Board'&&<QuestBoard data={data} completedCount={completedCount} busy={busy} onComplete={completeQuest} questOpen={questOpen} setQuestOpen={setQuestOpen} questTitle={questTitle} setQuestTitle={setQuestTitle} questCategory={questCategory} setQuestCategory={setQuestCategory} onAdd={addQuest}/>}
+          {tab==='Campaign Map'&&<CampaignMap data={data} busy={busy} onCreate={createCampaign} onComplete={completeCampaignStep}/>}
           {tab==='Skill Tree'&&<SkillTree data={data} busy={busy} onUnlock={unlockSkill}/>}
           {tab==='Armory'&&<Armory data={data} character={character} busy={busy} onBuy={buyItem} onEquip={equipItem} onBuyHero={buyHero} onSelectHero={chooseHero}/>}
           {tab==='Achievements'&&<Achievements data={data}/>}
         </>}
-        <footer className="guild-footer"><span>✦ LIFE RPG</span><i/> PROGRESS OVER PERFECTION <span className="footer-version">LOCAL CAMPAIGN · V2.2.1</span></footer>
+        <footer className="guild-footer"><span>✦ LIFE RPG</span><i/> PROGRESS OVER PERFECTION <span className="footer-version">LOCAL CAMPAIGN · V3.0</span></footer>
       </div>
     </main>
     {toast&&<div className="game-toast" role="status"><Sparkles size={16}/>{toast}</div>}
@@ -158,6 +168,48 @@ function AuthScreen({mode,setMode,onSuccess,showPassword,setShowPassword,error,s
     </div><div className="auth-copyright">© YOUR ADVENTURE, YOUR RULES <span>·</span> SAVE LOCALLY</div></div>
     <div className="auth-right"><div className="auth-moon"/><div className="auth-orbit orbit-a"/><div className="auth-orbit orbit-b"/><div className="auth-stars"><i>✦</i><i>✧</i><i>✦</i><i>·</i></div><div className="auth-hero"><CharacterPortrait look={chosenHero.look} heroId={chosenHero.id}/></div><div className="auth-right-copy"><span>{chosenHero.category.toUpperCase()} PATH · +{chosenHero.xpBonus} XP PER QUEST</span><h2>{chosenHero.name}.<br/><em>{chosenHero.tagline}.</em></h2><p>{chosenHero.description}</p></div><div className="auth-runestone"><Sparkles size={16}/><span>LEVEL UP<br/><b>YOUR REAL LIFE</b></span></div></div>
   </div>
+}
+
+function CampaignMap({data,busy,onCreate,onComplete}:{data:GameState;busy:string|null;onCreate:(campaign:{title:string;description:string;region:string;steps:{title:string;category:StatName}[]})=>Promise<boolean>;onComplete:(campaign:Campaign,step:CampaignStep)=>void}){
+  const campaigns=data.campaigns??[]
+  const [formOpen,setFormOpen]=useState(campaigns.length===0)
+  const [title,setTitle]=useState('')
+  const [description,setDescription]=useState('')
+  const [region,setRegion]=useState('The First Trail')
+  const [steps,setSteps]=useState([{title:'Take the first small step',category:'Focus' as StatName},{title:'Build a steady rhythm',category:'Mind' as StatName},{title:'Reach the first milestone',category:'Body' as StatName}])
+  async function submit(event:FormEvent){
+    event.preventDefault()
+    if(await onCreate({title,description,region,steps})){setTitle('');setDescription('');setFormOpen(false)}
+  }
+  function updateStep(index:number,field:'title'|'category',value:string){setSteps(current=>current.map((step,i)=>i===index?{...step,[field]:value}:step))}
+  const totalSteps=campaigns.reduce((sum,campaign)=>sum+campaign.totalSteps,0)
+  const completedSteps=campaigns.reduce((sum,campaign)=>sum+campaign.completedSteps,0)
+  return <>
+    <PageHeading kicker="LONG GOALS · SMALL QUESTS" title="Campaign atlas" subtitle="Turn a faraway goal into a trail of steps you can finish at your own pace." action={<button className="gold-button campaign-new" onClick={()=>setFormOpen(open=>!open)}>{formOpen?<X size={15}/>:<Plus size={15}/>}{formOpen?'Close chart':'Chart a campaign'}</button>}/>
+    <section className="campaign-overview"><div className="campaign-overview-icon"><Map size={22}/></div><div className="campaign-overview-copy"><span>YOUR PERSONAL EXPEDITION</span><h2>{campaigns.length?`${campaigns.length} ${campaigns.length===1?'campaign':'campaigns'} on the map`:'Every great story starts somewhere.'}</h2><p>{campaigns.length?`${completedSteps} of ${totalSteps} milestones complete. Your next step is always waiting when you are.`:'Choose one meaningful goal. The atlas will help you turn it into a clear, rewarding path.'}</p></div><div className="campaign-total"><b>{completedSteps}<i> / {totalSteps}</i></b><span>MILESTONES</span></div></section>
+    {formOpen&&<form className="campaign-form" onSubmit={event=>void submit(event)}>
+      <div className="campaign-form-head"><div><span className="panel-kicker">CHART A NEW EXPEDITION</span><h2>What would you like to work toward?</h2></div><MapPin size={20}/></div>
+      <div className="campaign-fields"><label>CAMPAIGN NAME<input required minLength={3} maxLength={60} value={title} onChange={event=>setTitle(event.target.value)} placeholder="Learn a new language"/></label><label>DESTINATION<select value={region} onChange={event=>setRegion(event.target.value)}><option>The First Trail</option><option>The Mindwilds</option><option>Ember Coast</option><option>Grove of Bonds</option></select></label></div>
+      <label className="campaign-description">YOUR WHY <textarea maxLength={240} value={description} onChange={event=>setDescription(event.target.value)} placeholder="A sentence to remind you why this goal matters…" rows={2}/></label>
+      <div className="milestone-editor-head"><div><span className="panel-kicker">MILESTONES</span><p>Start with small, specific actions. Each one is worth 30 XP + path bonuses and 10 coins.</p></div><button type="button" className="campaign-add-step" onClick={()=>setSteps(current=>current.length<8?[...current,{title:'',category:'Focus'}]:current)} disabled={steps.length>=8}><Plus size={14}/> ADD STEP</button></div>
+      <div className="milestone-editor">{steps.map((step,index)=><div className="milestone-input-row" key={index}><span>{String(index+1).padStart(2,'0')}</span><input required minLength={2} maxLength={80} aria-label={`Milestone ${index+1}`} value={step.title} onChange={event=>updateStep(index,'title',event.target.value)} placeholder={`Milestone ${index+1}`}/><select aria-label={`Path for milestone ${index+1}`} value={step.category} onChange={event=>updateStep(index,'category',event.target.value)}>{categories.map(category=><option key={category}>{category}</option>)}</select>{steps.length>2&&<button type="button" onClick={()=>setSteps(current=>current.filter((_,i)=>i!==index))} aria-label={`Remove milestone ${index+1}`}>×</button>}</div>)}</div>
+      <div className="campaign-form-footer"><span><Shield size={14}/> No deadlines. No lost XP. Progress stays yours.</span><button className="gold-button" type="submit"><Map size={15}/> Create campaign <ArrowRight size={15}/></button></div>
+    </form>}
+    {campaigns.length===0&&!formOpen&&<div className="campaign-empty"><span>✦</span><h2>The map is yours to draw.</h2><p>Start a campaign to break a big goal into milestones and earn rewards as you move along the trail.</p><button className="gold-outline" onClick={()=>setFormOpen(true)}>Chart your first campaign <ArrowRight size={14}/></button></div>}
+    <div className="campaign-list">{campaigns.map(campaign=>{
+      const activeIndex=campaign.steps.findIndex(step=>!step.completed)
+      const percent=campaign.totalSteps?Math.round(campaign.completedSteps/campaign.totalSteps*100):0
+      return <article className={`campaign-card ${activeIndex===-1?'campaign-finished':''}`} key={campaign.id}>
+        <div className="campaign-card-head"><div><span className="campaign-region"><MapPin size={12}/>{campaign.region.toUpperCase()}</span><h2>{campaign.title}</h2><p>{campaign.description||'A personal expedition, one milestone at a time.'}</p></div><div className="campaign-progress-badge"><b>{percent}<small>%</small></b><span>{activeIndex===-1?'COMPLETE':'IN PROGRESS'}</span></div></div>
+        <div className="campaign-progress-track"><i style={{width:`${percent}%`}}/></div>
+        <div className="campaign-path">{campaign.steps.map((step,index)=>{
+          const active=index===activeIndex
+          return <div className={`campaign-step ${step.completed?'step-complete':''} ${active?'step-active':''}`} key={step.id}><div className="campaign-step-marker"><span>{step.completed?<Check size={15}/>:String(index+1).padStart(2,'0')}</span><i/></div><div className="campaign-step-copy"><div><small>{step.category.toUpperCase()} PATH · MILESTONE {index+1}</small><h3>{step.title}</h3>{step.completed?<p>Completed · +{step.xp} base XP earned</p>:active?<p>Ready when you are · +{step.xp} XP + 10 coins</p>:<p>Waiting for the step before this one</p>}</div>{step.completed?<span className="step-state"><Check size={13}/> COMPLETE</span>:active?<button className="step-complete-button" disabled={busy===step.id} onClick={()=>onComplete(campaign,step)}>{busy===step.id?'RECORDING…':'COMPLETE STEP'} <ArrowRight size={13}/></button>:<span className="step-locked"><LockKeyhole size={13}/> LOCKED</span>}</div></div>
+        })}</div>
+        {activeIndex===-1&&<div className="campaign-finale"><Sparkles size={16}/> Campaign complete. Celebrate how far you have come, then chart another trail.</div>}
+      </article>
+    })}</div>
+  </>
 }
 
 function PageHeading({kicker,title,subtitle,action}:{kicker:string;title:string;subtitle:string;action?:React.ReactNode}){return <div className="page-heading"><div><div className="section-kicker">{kicker}</div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>}

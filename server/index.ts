@@ -109,9 +109,15 @@ function createSchema(db:Database.Database){
     CREATE TABLE IF NOT EXISTS quests (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL, category TEXT NOT NULL, xp INTEGER NOT NULL, stat TEXT NOT NULL,
-      done_on TEXT, created_at INTEGER NOT NULL
+      done_on TEXT, created_at INTEGER NOT NULL, campaign_id TEXT, step_order INTEGER,
+      campaign_completed_at TEXT
     );
     CREATE INDEX IF NOT EXISTS quests_user_idx ON quests(user_id);
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT 'The First Trail',
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS completions (
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       quest_id TEXT NOT NULL, completed_on TEXT NOT NULL, xp_awarded INTEGER NOT NULL, coins_awarded INTEGER NOT NULL DEFAULT 10
@@ -161,7 +167,15 @@ function grantStarterHeroes(db:Database.Database,userId:string){
 async function initializeDatabase(db:Database.Database){
   db.pragma('foreign_keys = ON')
   const version=(db.prepare('PRAGMA user_version').get() as {user_version:number}).user_version
-  if(version>=3){ createSchema(db); seedHeroDefinitions(db); return }
+  if(version>=4){ createSchema(db); seedHeroDefinitions(db); return }
+  if(version===3){
+    const backupPath=`${db.name}.v3-backup.sqlite`
+    const {existsSync}=await import('node:fs')
+    if(!existsSync(backupPath)) await db.backup(backupPath)
+    migrateCampaignSchema(db)
+    seedHeroDefinitions(db)
+    return
+  }
   if(version===2){
     const migrate=db.transaction(()=>{
       createSchema(db)
@@ -177,6 +191,10 @@ async function initializeDatabase(db:Database.Database){
       db.pragma('user_version = 3')
     })
     migrate()
+    const backupPath=`${db.name}.v3-backup.sqlite`
+    const {existsSync}=await import('node:fs')
+    if(!existsSync(backupPath)) await db.backup(backupPath)
+    migrateCampaignSchema(db)
     return
   }
 
@@ -193,6 +211,20 @@ async function initializeDatabase(db:Database.Database){
     seedHeroDefinitions(db)
     db.prepare('INSERT OR REPLACE INTO app_meta(key,value) VALUES (?,?)').run('legacy_save',hasLegacyProfile?'available':'claimed')
     db.pragma('user_version = 3')
+  })
+  migrate()
+  migrateCampaignSchema(db)
+}
+
+function migrateCampaignSchema(db:Database.Database){
+  const columns=new Set((db.prepare('PRAGMA table_info(quests)').all() as {name:string}[]).map(column=>column.name))
+  const migrate=db.transaction(()=>{
+    createSchema(db)
+    if(!columns.has('campaign_id')) db.exec('ALTER TABLE quests ADD COLUMN campaign_id TEXT')
+    if(!columns.has('step_order')) db.exec('ALTER TABLE quests ADD COLUMN step_order INTEGER')
+    if(!columns.has('campaign_completed_at')) db.exec('ALTER TABLE quests ADD COLUMN campaign_completed_at TEXT')
+    db.exec('CREATE INDEX IF NOT EXISTS quests_campaign_idx ON quests(user_id,campaign_id,step_order)')
+    db.pragma('user_version = 4')
   })
   migrate()
 }
@@ -328,7 +360,11 @@ function createApp(db:Database.Database){
     const userId=request.userId!
     const profile=profileFor(db,userId)
     const today=localDate(profile.timeZone)
-    const quests=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests WHERE user_id=? ORDER BY created_at,rowid').all(userId)
+    const quests=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests WHERE user_id=? AND campaign_id IS NULL ORDER BY created_at,rowid').all(userId)
+    const campaigns=(db.prepare('SELECT id,title,description,region,created_at AS createdAt FROM campaigns WHERE user_id=? ORDER BY created_at DESC').all(userId) as {id:string;title:string;description:string;region:string;createdAt:number}[]).map(campaign=>{
+      const steps=db.prepare(`SELECT id,title,category,xp,step_order AS orderIndex,campaign_completed_at AS completedAt FROM quests WHERE user_id=? AND campaign_id=? ORDER BY step_order`).all(userId,campaign.id) as {id:string;title:string;category:Category;xp:number;orderIndex:number;completedAt:string|null}[]
+      return {...campaign,steps:steps.map(step=>({...step,completed:Boolean(step.completedAt)})),completedSteps:steps.filter(step=>step.completedAt).length,totalSteps:steps.length}
+    })
     const stats=Object.fromEntries((db.prepare('SELECT name,value FROM stats WHERE user_id=?').all(userId) as {name:string;value:number}[]).map(item=>[item.name,item.value]))
     const weekStart=daysBefore(today,6)
     const week=db.prepare('SELECT COUNT(*) AS count,COALESCE(SUM(xp_awarded),0) AS xp FROM completions WHERE user_id=? AND completed_on>=?').get(userId,weekStart)
@@ -345,7 +381,53 @@ function createApp(db:Database.Database){
     const categoryCounts=Object.fromEntries((db.prepare(`SELECT q.category AS category,COUNT(*) AS count FROM completions c JOIN quests q ON q.id=c.quest_id AND q.user_id=c.user_id WHERE c.user_id=? GROUP BY q.category`).all(userId) as {category:Category;count:number}[]).map(row=>[row.category,row.count])) as Partial<Record<Category,number>>
     const unlockedAchievementIds=deriveAchievements(completions.count,level,unlocked.size,equipment,completedDays,categoryCounts,ownedHeroes.size)
     const achievements=achievementDefinitions.map(item=>{const progress=achievementProgress(item.id,completions.count,level,unlocked.size,equipment,completedDays,categoryCounts,ownedHeroes.size);return {...item,progress,target:achievementTargets[item.id],unlocked:unlockedAchievementIds.has(item.id)}})
-    response.json({profile,quests,stats,week,weekDays,today,skills,shopItems,inventory,equipment,heroes,achievements})
+    response.json({profile,quests,campaigns,stats,week,weekDays,today,skills,shopItems,inventory,equipment,heroes,achievements})
+  })
+
+  app.post('/api/campaigns',requireAuth,(request,response)=>{
+    const title=typeof request.body.title==='string'?request.body.title.trim().slice(0,60):''
+    const description=typeof request.body.description==='string'?request.body.description.trim().slice(0,240):''
+    const region=typeof request.body.region==='string'?request.body.region.trim().slice(0,40):'The First Trail'
+    const rawSteps:unknown[]=Array.isArray(request.body.steps)?request.body.steps:[]
+    const steps:{title:string;category:Category}[]=rawSteps.map((step:unknown)=>{
+      const value=step as {title?:unknown;category?:unknown}
+      return {title:typeof value?.title==='string'?value.title.trim().slice(0,80):'',category:String(value?.category??'') as Category}
+    })
+    if(title.length<3) return response.status(400).json({error:'Give your campaign a title of at least 3 characters.'})
+    if(steps.length<2||steps.length>8) return response.status(400).json({error:'A campaign needs between 2 and 8 milestones.'})
+    if(steps.some(step=>step.title.length<2||!categories.includes(step.category as Category))) return response.status(400).json({error:'Every milestone needs a title and a valid quest path.'})
+    const id=randomUUID(),userId=request.userId!,createdAt=Date.now()
+    const create=db.transaction(()=>{
+      db.prepare('INSERT INTO campaigns(id,user_id,title,description,region,created_at) VALUES (?,?,?,?,?,?)').run(id,userId,title,description,region,createdAt)
+      const insert=db.prepare('INSERT INTO quests(id,user_id,title,category,xp,stat,done_on,created_at,campaign_id,step_order) VALUES (?,?,?,?,30,?,NULL,?,?,?)')
+      for(const [index,step] of steps.entries()) insert.run(randomUUID(),userId,step.title,step.category,step.category,createdAt+index,id,index)
+    })
+    create()
+    response.status(201).json({id,title,description,region,totalSteps:steps.length})
+  })
+
+  app.patch('/api/campaigns/:campaignId/steps/:stepId/complete',requireAuth,(request,response)=>{
+    const userId=request.userId!,campaignId=String(request.params.campaignId),stepId=String(request.params.stepId)
+    const step=db.prepare('SELECT id,title,category,xp,stat,step_order AS stepOrder,campaign_completed_at AS completedAt FROM quests WHERE id=? AND user_id=? AND campaign_id=?').get(stepId,userId,campaignId) as {id:string;title:string;category:Category;xp:number;stat:Category;stepOrder:number;completedAt:string|null}|undefined
+    if(!step) return response.status(404).json({error:'Campaign milestone not found.'})
+    if(step.completedAt) return response.status(409).json({error:'This milestone is already complete.'})
+    if(db.prepare('SELECT 1 FROM quests WHERE user_id=? AND campaign_id=? AND step_order<? AND campaign_completed_at IS NULL').get(userId,campaignId,step.stepOrder)) return response.status(409).json({error:'Complete the earlier milestone first.'})
+    const profile=profileFor(db,userId),today=localDate(profile.timeZone)
+    const skillBonus=db.prepare('SELECT COALESCE(SUM(s.xp_bonus),0) AS bonus FROM unlocked_skills u JOIN skill_definitions s ON s.id=u.skill_id WHERE u.user_id=? AND s.category=?').get(userId,step.category) as {bonus:number}
+    const hero=heroDefinitions.find(item=>item.id===profile.heroId)
+    const xpAwarded=step.xp+skillBonus.bonus+(hero?.category===step.category?hero.xpBonus:0)
+    const coinsAwarded=10,currentLevel=Math.floor(profile.xp/250)+1,nextXP=profile.xp+xpAwarded,nextLevel=Math.floor(nextXP/250)+1
+    const skillPoints=profile.skillPoints+Math.max(0,nextLevel-currentLevel)
+    const streak=profile.lastActive===today?profile.streak:profile.lastActive===daysBefore(today,1)?profile.streak+1:1
+    const complete=db.transaction(()=>{
+      const updated=db.prepare('UPDATE quests SET done_on=?,campaign_completed_at=? WHERE id=? AND user_id=? AND campaign_id=? AND campaign_completed_at IS NULL').run(today,today,stepId,userId,campaignId)
+      if(updated.changes!==1) throw new Error('CAMPAIGN_STEP_ALREADY_DONE')
+      db.prepare('INSERT INTO completions(user_id,quest_id,completed_on,xp_awarded,coins_awarded) VALUES (?,?,?,?,?)').run(userId,stepId,today,xpAwarded,coinsAwarded)
+      db.prepare('UPDATE profiles SET xp=?,coins=coins+?,skill_points=?,streak=?,last_active=? WHERE user_id=?').run(nextXP,coinsAwarded,skillPoints,streak,today,userId)
+      db.prepare('UPDATE stats SET value=value+1 WHERE user_id=? AND name=?').run(userId,step.stat)
+    })
+    try{complete()}catch(error){if(error instanceof Error&&error.message==='CAMPAIGN_STEP_ALREADY_DONE')return response.status(409).json({error:'This milestone is already complete.'});throw error}
+    response.json({ok:true,xpAwarded,coinsAwarded,leveledUp:nextLevel>currentLevel,level:nextLevel,skillPoints})
   })
 
   app.patch('/api/profile/class',requireAuth,(request,response)=>{
@@ -393,8 +475,9 @@ function createApp(db:Database.Database){
     const userId=request.userId!
     const profile=profileFor(db,userId)
     const today=localDate(profile.timeZone)
-    const quest=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn FROM quests WHERE id=? AND user_id=?').get(request.params.id,userId) as {id:string;title:string;category:Category;xp:number;stat:Category;doneOn:string|null}|undefined
+    const quest=db.prepare('SELECT id,title,category,xp,stat,done_on AS doneOn,campaign_id AS campaignId FROM quests WHERE id=? AND user_id=?').get(request.params.id,userId) as {id:string;title:string;category:Category;xp:number;stat:Category;doneOn:string|null;campaignId:string|null}|undefined
     if(!quest) return response.status(404).json({error:'Quest not found.'})
+    if(quest.campaignId) return response.status(400).json({error:'Complete campaign milestones from the campaign map.'})
     if(quest.doneOn===today) return response.status(409).json({error:'Quest already completed today.'})
     const skillBonus=db.prepare(`SELECT COALESCE(SUM(s.xp_bonus),0) AS bonus FROM unlocked_skills u JOIN skill_definitions s ON s.id=u.skill_id WHERE u.user_id=? AND s.category=?`).get(userId,quest.category) as {bonus:number}
     const hero=heroDefinitions.find(item=>item.id===profile.heroId)

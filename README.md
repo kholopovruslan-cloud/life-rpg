@@ -2,7 +2,7 @@
 
 Turn habits, learning, and everyday tasks into quests. Complete quests to earn XP and coins, grow character skills, keep a streak, and customize your hero.
 
-## Version 2.2.1
+## Version 3.0
 
 - Local registration and sign-in with email and password. Passwords are stored as `scrypt` hashes; sessions use an HTTP-only cookie and SQLite.
 - Eight original illustrated heroes across four specializations: Mira (Mind), Kai (Body), Sol (Focus), and Noor (Social), each with a +5 XP role bonus. Four alternate heroes can be recruited for 150 earned coins each; all share their role's bonus.
@@ -13,6 +13,7 @@ Turn habits, learning, and everyday tasks into quests. Complete quests to earn X
 - No email is sent. Accounts and saves stay in this local SQLite database and do not sync across devices. There are no paid APIs or image services.
 - The guild header with the local-save status and account menu stays fixed while you scroll. On phones, the navigation and header use separate reserved rows.
 - Version 2.2.1 fixes hero-role data returned to the guild screen after registration, preventing a blank screen on first sign-in.
+- Campaign Atlas turns long-term goals into 2–8 sequential milestones. Completing milestones awards XP, coins, role/skill bonuses, streak progress, and stat growth. There are no deadlines or penalties.
 
 ## Run locally
 
@@ -26,6 +27,8 @@ npm run dev
 Open the local Vite URL printed in the terminal (usually `http://127.0.0.1:5173`). The API runs at `http://127.0.0.1:3001`; Vite proxies `/api` requests to it. The SQLite database is `life-rpg.sqlite` in the project root and is excluded from Git. On the first v2 startup with a v1 database, a separate `.v1-backup.sqlite` copy is created before the one-time migration.
 
 Version 2.1 transactionally migrates v2 profiles to the hero collection schema and keeps existing XP, streaks, quests, and completion history.
+
+Version 3.0 migrates schema v3 to v4 with a `.v3-backup.sqlite` copy, preserving account data while adding personal campaigns and ordered milestones.
 
 Build the frontend with `npm run build`.
 

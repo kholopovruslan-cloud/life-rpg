@@ -1,10 +1,10 @@
 # Note for the next AI
 
-Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогрыз), the friendly goblin who brought LIFE RPG through versions 2.1 and 2.2.
+Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогрыз), the friendly goblin who helped bring LIFE RPG to version 3.0.
 
 ## What is here
 
-- LIFE RPG v2.2.1 is an English-language React + TypeScript interface with an Express API and local SQLite storage.
+- LIFE RPG v3.0 is an English-language React + TypeScript interface with an Express API and local SQLite storage.
 - Local account registration, sign-in, sign-out, password changes, `scrypt` password hashes, hashed database session tokens, and HTTP-only session cookies are implemented. No mail is sent; password recovery by email is not available.
 - Data is scoped to the signed-in user. First registration imports the v1 save after a database backup; later accounts start with fresh profiles and quests.
 - Quests award XP and 10 coins. Every 250 XP grants a level and skill point. Skill branches enforce level/prerequisite gates and grant category XP bonuses.
@@ -13,6 +13,9 @@ Hello, fellow AI. I’m **Captain Questgnaw** (Капитан Квестогры
 - Original SVG portraits are project assets. There are no paid API, AI, or image dependencies.
 - The 2.2 guild topbar containing `LOCAL SAVE` and the account menu stays fixed on desktop and mobile; mobile navigation occupies its own fixed row above it.
 - The v2.2.1 `/api/state` hero records include `className` for the UI as well as the database-oriented `characterClass`; keep both fields in sync when changing the hero payload.
+- Version 3.0 adds Campaign Atlas: each account can create goal campaigns with 2–8 ordered milestones. Milestones are stored as user-owned quest rows, hidden from the daily quest board, and completed once in sequence from the campaign map.
+- Campaign milestone completion uses the standard level, XP, coin, streak, stat, role-bonus, and skill-bonus rules. Campaign progress has no deadline or decay. API routes are user-scoped and reject skipped or repeated steps.
+- Schema v4 adds `campaigns` and campaign metadata columns to `quests`; existing schema-v3 databases are backed up to `life-rpg.sqlite.v3-backup.sqlite` before migration.
 
 ## Run it
 
@@ -26,7 +29,7 @@ The API defaults to `http://127.0.0.1:3001`; Vite proxies `/api`. The local DB i
 
 - `src/App.tsx` — sign-in, guild UI, quests, skills, armory, and achievements.
 - `src/styles.css` — responsive dark RPG styling.
-- `server/index.ts` — auth/session handling, user-scoped SQLite schema, migrations, and game API. Schema v3 adds hero ownership and assigns existing profiles a starter matching their role.
+- `server/index.ts` — auth/session handling, user-scoped SQLite schema, v1–v4 migrations, and game/campaign APIs. Schema v3 adds hero ownership; schema v4 adds Campaign Atlas.
 - `vite.config.ts` — React plugin and local API proxy.
 
 ## Git history
@@ -40,6 +43,16 @@ The API defaults to `http://127.0.0.1:3001`; Vite proxies `/api`. The local DB i
 - Version 2.2.1 commit: `af73f43` — `Fix: Map hero roles for the guild dashboard`.
 - The release sequence is v1 `644f969`, v1.1 `72e748f`, v2.0 `f7fb396`, v2.1 `cd5777e`, v2.2 `9d13cc3`, and v2.2.1 `af73f43`. This hash is recorded in the follow-up docs commit; keep earlier history intact.
 
+## Version 3.0 review status
+
+- `npm run build` passes after the Campaign Atlas changes.
+- Isolated SQLite/API smoke check passes for v3→v4 migration, registration on a migrated database, campaign creation, daily-board separation, ordered milestone completion, replay/skip guards, reward calculation, and account isolation. Test data used a separate temporary database and did not alter the user's save.
+- The user's local database is now schema v4; its pre-migration `.v3-backup.sqlite` copy was created. No campaign data was added to the user's profile during review.
+- The user reviewed the local v3.0 build and authorized a local commit. Do not push to GitHub unless they explicitly ask.
+- Current feature scope is personal campaigns with 2–8 ordered milestone quests, campaign map UI, one-time sequential completion, regular XP/coin/streak/stat/skill/hero rewards, and no deadlines or decay.
+- The SQLite v3→v4 migration backs up to `.v3-backup.sqlite` before applying schema changes. Existing profiles and daily quests stay intact.
+- The v3→v4 startup path also seeds hero definitions, so a schema-v3 database without prior hero rows can register its first account safely.
+
 ## Constraints
 
-Keep the interface in English unless asked otherwise. Accounts are local to this device; do not imply cloud sync. Keep images and services free. This version deliberately has no combat or punishments for missed real-life tasks.
+Keep the interface in English unless asked otherwise. Accounts are local to this device; do not imply cloud sync. Keep images and services free. The current build deliberately has no combat or punishments for missed real-life tasks.
