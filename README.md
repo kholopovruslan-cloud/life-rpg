@@ -39,3 +39,8 @@ This is a single-device local app, not a hosted account service. Email confirmat
 ## Previous version
 
 Version 1 and its commits remain in Git history. The v2 database migration keeps the old XP, streak, stats, quests, and completion history for the first new account, while the signup form supplies the new display name and character class.
+
+## Project demo
+
+[Watch the LIFE RPG demo](public/life-rpg-demo.mp4) · [Open it in the running app](/life-rpg-demo.mp4)
+
